@@ -242,6 +242,15 @@ export const DiseaseDetection: React.FC = () => {
                     <ShieldAlert size={14} /> {t('disease.detected')}
                   </span>
                   <h2 className="disease-name-label">{report.diseaseName}</h2>
+                  <a 
+                    href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(report.diseaseName + ' ' + selectedCropType + ' disease symptoms treatment medicine')}`} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="btn btn-outline btn-sm flex-center"
+                    style={{ gap: '0.35rem', marginTop: '0.5rem', display: 'inline-flex', fontSize: '0.8rem', padding: '0.35rem 0.75rem', textDecoration: 'none', color: 'var(--text-primary)' }}
+                  >
+                    🖼️ View Symptoms & Medicine Photos
+                  </a>
                 </div>
                 <div className="confidence-meter text-center">
                   <span className="confidence-val">{report.confidence}%</span>

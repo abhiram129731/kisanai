@@ -70,10 +70,25 @@ export const MyFarms: React.FC = () => {
   const fetchUserLocation = (): Promise<{ lat: number; lng: number }> => {
     return new Promise((resolve) => {
       if (!navigator.geolocation) {
-        const errMsg = "Geolocation is not supported by your browser.";
+        const errMsg = "Geolocation is not supported by your browser. Trying IP Geolocation fallback.";
         setGpsError(errMsg);
-        setGpsStatus('Failed');
-        resolve({ lat: 20.5937, lng: 78.9629 });
+        setGpsStatus('Trying IP Fallback');
+        fetch('https://ipapi.co/json/')
+          .then(res => res.json())
+          .then(data => {
+            if (data && typeof data.latitude === 'number' && typeof data.longitude === 'number') {
+              setGpsLoading(false);
+              setGpsStatus('IP Success');
+              resolve({ lat: data.latitude, lng: data.longitude });
+            } else {
+              setGpsStatus('Failed');
+              resolve({ lat: 20.5937, lng: 78.9629 });
+            }
+          })
+          .catch(() => {
+            setGpsStatus('Failed');
+            resolve({ lat: 20.5937, lng: 78.9629 });
+          });
         return;
       }
 
@@ -92,18 +107,37 @@ export const MyFarms: React.FC = () => {
         },
         (err) => {
           console.warn("[GPS Error] Code:", err.code, "Message:", err.message);
-          let msg = "Failed to retrieve location.";
+          let msg = "Failed to retrieve GPS. Trying IP Geolocation fallback.";
           if (err.code === 1) {
-            msg = "Location permission denied. Please enable location access in your browser settings.";
+            msg = "Location permission denied. Trying IP Geolocation fallback.";
           } else if (err.code === 2) {
-            msg = "GPS location signal unavailable. Using fallback location.";
+            msg = "GPS location signal unavailable. Trying IP Geolocation fallback.";
           } else if (err.code === 3) {
-            msg = "Location request timed out. Using fallback location.";
+            msg = "Location request timed out. Trying IP Geolocation fallback.";
           }
           setGpsError(msg);
-          setGpsLoading(false);
-          setGpsStatus('Failed');
-          resolve({ lat: 20.5937, lng: 78.9629 });
+          setGpsStatus('Trying IP Fallback');
+
+          fetch('https://ipapi.co/json/')
+            .then(res => res.json())
+            .then(data => {
+              if (data && typeof data.latitude === 'number' && typeof data.longitude === 'number') {
+                console.log(`[IP Geo Success] Lat: ${data.latitude}, Lng: ${data.longitude}`);
+                setGpsLoading(false);
+                setGpsStatus('IP Success');
+                resolve({ lat: data.latitude, lng: data.longitude });
+              } else {
+                setGpsLoading(false);
+                setGpsStatus('Failed');
+                resolve({ lat: 20.5937, lng: 78.9629 });
+              }
+            })
+            .catch((fetchErr) => {
+              console.error("IP Geolocation fallback failed:", fetchErr);
+              setGpsLoading(false);
+              setGpsStatus('Failed');
+              resolve({ lat: 20.5937, lng: 78.9629 });
+            });
         },
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
@@ -234,8 +268,8 @@ export const MyFarms: React.FC = () => {
         attribution: 'Map data &copy; Google'
       });
 
-      // Default to hybrid
-      googleHybrid.addTo(map);
+      // Default to Esri Satellite
+      esriSatellite.addTo(map);
 
       // Layer selector
       L.control.layers({
@@ -623,8 +657,8 @@ export const MyFarms: React.FC = () => {
         attribution: 'Map data &copy; Google'
       });
 
-      // Default to hybrid
-      googleHybrid.addTo(map);
+      // Default to Esri Satellite
+      esriSatellite.addTo(map);
 
       // Layer selector
       L.control.layers({

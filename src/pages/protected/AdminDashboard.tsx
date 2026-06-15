@@ -27,6 +27,29 @@ export const AdminDashboard: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState('all');
 
+  const loadSubmissions = async () => {
+    try {
+      const data = await api.admin.getInquiries();
+      const formatted = data.map((item: any) => ({
+        id: item._id || item.id,
+        name: item.name,
+        email: item.email,
+        phone: item.phone || '',
+        message: item.message,
+        date: item.date
+      }));
+      setSubmissions(formatted);
+    } catch (err) {
+      console.warn("[Admin API] Failed to fetch contact inquiries, loading local fallback:", err);
+      const saved = localStorage.getItem('kisan_contact_submissions');
+      if (saved) {
+        setSubmissions(JSON.parse(saved));
+      } else {
+        setSubmissions([]);
+      }
+    }
+  };
+
   const loadAllUsers = async () => {
     const list: ManagedUser[] = [];
     
@@ -95,21 +118,22 @@ export const AdminDashboard: React.FC = () => {
   };
 
   useEffect(() => {
-    const saved = localStorage.getItem('kisan_contact_submissions');
-    if (saved) {
-      setSubmissions(JSON.parse(saved));
-    } else {
-      setSubmissions([]);
-    }
-    
+    loadSubmissions();
     loadAllUsers();
   }, []);
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this submission log?')) {
-      const updated = submissions.filter(s => s.id !== id);
-      setSubmissions(updated);
-      localStorage.setItem('kisan_contact_submissions', JSON.stringify(updated));
+      try {
+        await api.admin.deleteInquiry(id);
+        alert('Successfully deleted inquiry log.');
+        await loadSubmissions();
+      } catch (err) {
+        console.warn("Failed to delete inquiry on API, falling back to local deletion:", err);
+        const updated = submissions.filter(s => s.id !== id);
+        setSubmissions(updated);
+        localStorage.setItem('kisan_contact_submissions', JSON.stringify(updated));
+      }
     }
   };
 
@@ -227,8 +251,8 @@ export const AdminDashboard: React.FC = () => {
   const filteredUsers = useMemo(() => {
     return users.filter(u => {
       const matchesSearch = 
-        u.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        u.email.toLowerCase().includes(searchQuery.toLowerCase());
+        (u.displayName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (u.email || '').toLowerCase().includes(searchQuery.toLowerCase());
       return matchesSearch;
     });
   }, [users, searchQuery]);

@@ -65,7 +65,8 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
     return <Navigate to="/login" replace />;
   }
 
-  if (!user.isOnboarded) {
+  // Admin users bypass onboarding
+  if (!user.isOnboarded && user.role !== 'admin') {
     return <Navigate to="/onboarding" replace />;
   }
 
@@ -91,12 +92,35 @@ const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>;
 };
 
+// Farmer Route Guard (Prevents admins from accessing farmer features)
+const FarmerRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="flex-center" style={{ height: '100vh', width: '100vw', backgroundColor: 'var(--bg-secondary)' }}>
+        <span className="spinner-loader"></span>
+      </div>
+    );
+  }
+
+  if (user && user.role === 'admin') {
+    return <Navigate to="/admin" replace />;
+  }
+
+  return <>{children}</>;
+};
+
 // Onboarding Guard (Redirects if already onboarded)
 const OnboardingRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (user.role === 'admin') {
+    return <Navigate to="/admin" replace />;
   }
   
   if (user.isOnboarded) {
@@ -111,6 +135,9 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   
   if (user) {
+    if (user.role === 'admin') {
+      return <Navigate to="/admin" replace />;
+    }
     return <Navigate to={user.isOnboarded ? "/dashboard" : "/onboarding"} replace />;
   }
 
@@ -141,15 +168,15 @@ const AppContent: React.FC = () => {
 
         {/* Protected Dashboard Routes */}
         <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/farms" element={<MyFarms />} />
-          <Route path="/weather" element={<Weather />} />
-          <Route path="/disease" element={<DiseaseDetection />} />
-          <Route path="/copilot" element={<AICopilot />} />
-          <Route path="/cashbook" element={<Cashbook />} />
-          <Route path="/analytics" element={<Dashboard />} />
-          <Route path="/community" element={<Community />} />
-          <Route path="/reports" element={<Reports />} />
+          <Route path="/dashboard" element={<FarmerRoute><Dashboard /></FarmerRoute>} />
+          <Route path="/farms" element={<FarmerRoute><MyFarms /></FarmerRoute>} />
+          <Route path="/weather" element={<FarmerRoute><Weather /></FarmerRoute>} />
+          <Route path="/disease" element={<FarmerRoute><DiseaseDetection /></FarmerRoute>} />
+          <Route path="/copilot" element={<FarmerRoute><AICopilot /></FarmerRoute>} />
+          <Route path="/cashbook" element={<FarmerRoute><Cashbook /></FarmerRoute>} />
+          <Route path="/analytics" element={<FarmerRoute><Dashboard /></FarmerRoute>} />
+          <Route path="/community" element={<FarmerRoute><Community /></FarmerRoute>} />
+          <Route path="/reports" element={<FarmerRoute><Reports /></FarmerRoute>} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/admin" element={<AdminRoute><AdminDashboard /></AdminRoute>} />
         </Route>

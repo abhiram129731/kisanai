@@ -1373,28 +1373,65 @@ const getLocalDiseaseReport = (cropType, language) => {
   };
 
   const key = cropType.toLowerCase();
-  const activeReport = reports[key] || reports.cotton;
   
   if (activeLang === 'te') {
-    return {
-      diseaseName: activeReport.diseaseName,
-      confidence: activeReport.confidence,
-      description: `పంట ఆకులపై నల్లటి మచ్చలు ఏర్పడి రాలిపోతాయి. ${activeReport.description}`,
-      prevention: `నీరు నిల్వ ఉండకుండా చూసుకోవాలి. ${activeReport.prevention}`,
-      treatment: `కాపర్ ఆక్సిక్లోరైడ్ పిచికారీ చేయండి. ${activeReport.treatment}`,
-      fertilizer: `పోటాష్ వేయడం వల్ల పంట నిరోధక శక్తి పెరుగుతుంది. ${activeReport.fertilizer}`
+    const reportsTe = {
+      cotton: {
+        diseaseName: 'ఆకు మాడు తెగులు (Leaf Blight)',
+        confidence: 94,
+        description: 'పత్తి ఆకులపై గుండ్రటి గోధుమ-నలుపు మచ్చలు ఏర్పడతాయి. దీనివల్ల ఆకులు త్వరగా రాలిపోయి, దిగుబడి తగ్గుతుంది.',
+        prevention: 'పొలంలో నీరు నిల్వ ఉండకుండా చూసుకోవాలి. తెగులు సోకని ధృవీకరించబడిన విత్తనాలను మాత్రమే వాడాలి.',
+        treatment: 'కాపర్ ఆక్సిక్లోరైడ్ (లీటరు నీటికి 2.5 గ్రాములు) లేదా మాంకోజెబ్ (లీటరు నీటికి 2 గ్రాములు) కలిపి పిచికారీ చేయాలి. అవసరమైతే 12-14 రోజుల తర్వాత మళ్లీ పిచికారీ చేయాలి.',
+        fertilizer: 'పంట నిరోధక శక్తిని పెంచడానికి పొటాష్ ఎరువును వాడాలి. అధిక నత్రజని ఎరువుల వాడకాన్ని తగ్గించాలి.'
+      },
+      paddy: {
+        diseaseName: 'వరి అగ్గి తెగులు (Rice Blast)',
+        confidence: 96,
+        description: 'ఆకులపై నూలు కండె ఆకారపు బూడిద రంగు మచ్చలు ఏర్పడతాయి. నివారించకపోతే పంట పూర్తిగా నష్టపోతుంది.',
+        prevention: 'నత్రజని ఎరువులు మోతాదుకు మించి వేయకూడదు. నాటడానికి ముందు ట్రైసైక్లాజోల్‌తో విత్తన శుద్ధి చేయాలి.',
+        treatment: 'ట్రైసైక్లాజోల్ (లీటరు నీటికి 0.6 గ్రాములు) లేదా కార్బెండజిమ్ (లీటరు నీటికి 1 గ్రాము) కలిపి పిచికారీ చేయాలి.',
+        fertilizer: 'నత్రజనిని 3 లేదా 4 విడతలుగా వేయాలి. తగినంత పొటాష్ అందుబాటులో ఉంచాలి.'
+      },
+      maize: {
+        diseaseName: 'మొక్కజొన్న ఆకు మాడు తెగులు (Turcicum Leaf Blight)',
+        confidence: 91,
+        description: 'ఆకులపై పొడవైన పిలక ఆకారపు మచ్చలు ఏర్పడతాయి. తెగులు క్రింది ఆకుల నుండి ప్రారంభమై పైకి వ్యాపిస్తుంది.',
+        prevention: 'పప్పుధాన్యాల పంటలతో పంట మార్పిడి చేయాలి. లోతు దుక్కి దున్నాలి.',
+        treatment: 'మాంకోజెబ్ (లీటరు నీటికి 2.5 గ్రాములు) లేదా జినెబ్ (లీటరు నీటికి 2 గ్రాములు) కలిపి పిచికారీ చేయాలి.',
+        fertilizer: 'సమతుల్య ఎరువులు వేయాలి. ఎకరానికి 10 కిలోల జింక్ సల్ఫేట్ వేయడం వల్ల పంటకు నిరోधక శక్తి పెరుగుతుంది.'
+      }
     };
+    return reportsTe[key] || reportsTe.cotton;
   }
   
   if (activeLang === 'hi') {
-    return {
-      diseaseName: activeReport.diseaseName,
-      confidence: activeReport.confidence,
-      description: `पत्तियों पर धब्बे पड़ना और फसल का सूखना। ${activeReport.description}`,
-      prevention: `खेत में जल निकास दुरुस्त रखें। ${activeReport.prevention}`,
-      treatment: `कॉपर ऑक्सीक्लोराइड का छिड़काव करें। ${activeReport.treatment}`,
-      fertilizer: `पोटाश की उचित मात्रा दें। ${activeReport.fertilizer}`
+    const reportsHi = {
+      cotton: {
+        diseaseName: 'पत्ती झुलसा रोग (Leaf Blight)',
+        confidence: 94,
+        description: 'कपास की पत्तियों पर भूरे-काले गोलाकार धब्बे बन जाते हैं, जिससे पत्तियां समय से पहले गिर जाती हैं और पैदावार कम हो जाती है।',
+        prevention: 'खेत में जल निकास की उचित व्यवस्था करें। रोग प्रतिरोधी प्रमाणित बीजों का ही उपयोग करें।',
+        treatment: 'कॉपर ऑक्सीक्लोराइड (2.5 ग्राम/लीटर) या मैंकोजेब (2 ग्राम/लीटर) का छिड़काव करें। 12-14 दिनों के बाद छिड़काव दोहराएं।',
+        fertilizer: 'रोग प्रतिरोधकता बढ़ाने के लिए पोटाश उर्वरक का प्रयोग करें। अत्यधिक नाइट्रोजन से बचें।'
+      },
+      paddy: {
+        diseaseName: 'धान का झोंका रोग (Rice Blast)',
+        confidence: 96,
+        description: 'पत्तियों पर राख के रंग के केंद्र वाले धब्बे बन जाते हैं, जिससे फसल पूरी तरह नष्ट हो सकती है।',
+        prevention: 'अत्यधिक नाइट्रोजन उर्वरकों के उपयोग से बचें। बुवाई से पहले ट्राइसाइक्लाजोल से बीज उपचार करें।',
+        treatment: 'ट्राइसाइक्लाजोल (0.6 ग्राम/लीटर) या कार्बेन्डाजिम (1 ग्राम/लीटर) का छिड़काव करें।',
+        fertilizer: 'नाइट्रोजन को 3 या 4 खुराकों में विभाजित करके दें। पोटाश का उचित प्रयोग सुनिश्चित करें।'
+      },
+      maize: {
+        diseaseName: 'मक्का पत्ती झुलसा रोग (Turcicum Leaf Blight)',
+        confidence: 91,
+        description: 'पत्तियों पर बड़े, लंबे, भूरे रंग के धब्बे दिखाई देते हैं। यह आमतौर पर नीचे की पत्तियों से शुरू होकर ऊपर की ओर बढ़ता है।',
+        prevention: 'दलहन फसलों के साथ फसल चक्र अपनाएं। रोगग्रस्त अवशेषों को जला दें।',
+        treatment: 'मैंकोजेब (2.5 ग्राम/लीटर) या ज़िनेब (2 ग्राम/लीटर) का छिड़काव तुरंत करें।',
+        fertilizer: 'संतुलित खाद डालें। जिंक सल्फेट (10 किलोग्राम/एकड़) का प्रयोग करने से पौधे की ताकत बढ़ती है।'
+      }
     };
+    return reportsHi[key] || reportsHi.cotton;
   }
 
   return activeReport;
@@ -1422,7 +1459,7 @@ app.post('/api/disease/analyze', authenticateToken, async (req, res) => {
   const activeCrop = cropType || 'Cotton';
   const activeLang = language || 'en';
 
-  const GEMINI_API_KEY = process.env.VITE_GEMINI_API_KEY || '';
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
   const isKeyValid = GEMINI_API_KEY.startsWith('AIzaSy') || GEMINI_API_KEY.startsWith('AQ');
 
   if (!GEMINI_API_KEY || !isKeyValid) {
@@ -1433,12 +1470,14 @@ app.post('/api/disease/analyze', authenticateToken, async (req, res) => {
     const rawData = image.split(',')[1] || image;
     let geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     
+    const systemInstructionText = `You are KisanAI Crop Diagnostic Agent. You must analyze the crop leaf image and diagnose the disease. You MUST respond strictly in the requested language: ${getLanguageName(activeLang)}. In the treatment section, you must suggest specific chemical or organic medicine names available in India (e.g. Blitox, Mancozeb M-45, Ridomil Gold, Amistar, etc.) and exact dosage parameters. Return the response strictly as a JSON object. The keys of the JSON object MUST remain in English: diseaseName, confidence, description, prevention, treatment, fertilizer. All values corresponding to these keys MUST be written entirely in ${getLanguageName(activeLang)}. Do not include any markdown styling like \`\`\`json or backticks in the response.`;
+
     const requestPacket = {
       contents: [
         {
           parts: [
             {
-              text: `Analyze this crop leaf image for the crop type "${activeCrop}". Identify the crop disease, provide a confidence score, a description, prevention tips, specific treatment methods (including organic and chemical treatments, specific medicine names, and exact dosage ratios), and fertilizer recommendations. Return the response strictly as a JSON object with keys: diseaseName, confidence (number between 50-100), description, prevention, treatment, fertilizer. Respond in ${getLanguageName(activeLang)}.`
+              text: `Analyze this crop leaf image for the crop type "${activeCrop}".`
             },
             {
               inlineData: {
@@ -1448,7 +1487,10 @@ app.post('/api/disease/analyze', authenticateToken, async (req, res) => {
             }
           ]
         }
-      ]
+      ],
+      systemInstruction: {
+        parts: [{ text: systemInstructionText }]
+      }
     };
 
     let response = await fetchWithRetry(geminiUrl, {
@@ -1710,10 +1752,16 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   const { prompt, history, language } = req.body;
   if (!prompt) return res.status(400).json({ error: 'Prompt is required.' });
 
-  const activeLang = language || 'en';
-  const GEMINI_API_KEY = process.env.VITE_GEMINI_API_KEY || '';
-  const systemContext = `You are KisanAI Copilot, an expert agricultural bot advising Indian farmers. Provide clear, direct actionable recommendations. Respond in ${getLanguageName(activeLang)}. Make your response context-aware and focused on agriculture (soils, crops, fertilizers, irrigation, pests). Context prompt: ${prompt}`;
-
+  let activeLang = language;
+  if (!activeLang) {
+    try {
+      const user = await DB.findUserByUid(req.user.uid);
+      activeLang = (user && user.preferences && user.preferences.language) || 'en';
+    } catch (e) {
+      activeLang = 'en';
+    }
+  }
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
   const isKeyValid = GEMINI_API_KEY.startsWith('AIzaSy') || GEMINI_API_KEY.startsWith('AQ');
   if (!GEMINI_API_KEY || !isKeyValid) {
     const fallbackText = getLocalBotResponse(prompt, activeLang);
@@ -1732,14 +1780,23 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
     contents.push({
       role: 'user',
-      parts: [{ text: systemContext }]
+      parts: [{ text: prompt }]
     });
+
+    const systemInstructionText = `You are KisanAI Copilot, an expert agricultural bot advising Indian farmers. Provide clear, direct actionable recommendations. You MUST respond in ${getLanguageName(activeLang)}. Make your response context-aware and focused on agriculture (soils, crops, fertilizers, irrigation, pests).`;
+
+    const requestPacket = {
+      contents,
+      systemInstruction: {
+        parts: [{ text: systemInstructionText }]
+      }
+    };
 
     let geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     let response = await fetchWithRetry(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents })
+      body: JSON.stringify(requestPacket)
     });
 
     if (!response.ok && response.status === 404) {
@@ -1822,9 +1879,16 @@ app.post('/api/chat/conversations/:id/messages', authenticateToken, async (req, 
     conv.messages.push(userMsg);
 
     // Call Gemini (or local fallback)
-    const activeLang = language || 'en';
-    const GEMINI_API_KEY = process.env.VITE_GEMINI_API_KEY || '';
-    const systemContext = `You are KisanAI Copilot, an expert agricultural bot advising Indian farmers. Provide clear, direct actionable recommendations. Respond in ${getLanguageName(activeLang)}. Make your response context-aware and focused on agriculture (soils, crops, fertilizers, irrigation, pests). Context prompt: ${text}`;
+    let activeLang = language;
+    if (!activeLang) {
+      try {
+        const user = await DB.findUserByUid(req.user.uid);
+        activeLang = (user && user.preferences && user.preferences.language) || 'en';
+      } catch (e) {
+        activeLang = 'en';
+      }
+    }
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
 
     let reply = '';
     const isKeyValid = GEMINI_API_KEY.startsWith('AIzaSy') || GEMINI_API_KEY.startsWith('AQ');
@@ -1839,14 +1903,23 @@ app.post('/api/chat/conversations/:id/messages', authenticateToken, async (req, 
         });
         contents.push({
           role: 'user',
-          parts: [{ text: systemContext }]
+          parts: [{ text: text }]
         });
+
+        const systemInstructionText = `You are KisanAI Copilot, an expert agricultural bot advising Indian farmers. Provide clear, direct actionable recommendations. You MUST respond in ${getLanguageName(activeLang)}. Make your response context-aware and focused on agriculture (soils, crops, fertilizers, irrigation, pests).`;
+
+        const requestPacket = {
+          contents,
+          systemInstruction: {
+            parts: [{ text: systemInstructionText }]
+          }
+        };
 
         let geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
         let response = await fetchWithRetry(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents })
+          body: JSON.stringify(requestPacket)
         });
 
         if (!response.ok && response.status === 404) {
@@ -1986,7 +2059,7 @@ app.get('/api/weather', authenticateToken, async (req, res) => {
   const { lat, lng, crop } = req.query;
   if (!lat || !lng) return res.status(400).json({ error: 'Latitude and Longitude are required.' });
 
-  const apiKey = process.env.VITE_OPENWEATHERMAP_API_KEY;
+  const apiKey = process.env.OPENWEATHERMAP_API_KEY || process.env.VITE_OPENWEATHERMAP_API_KEY;
   const targetCrop = crop || 'Cotton';
 
   const localFallback = () => {
@@ -2101,7 +2174,7 @@ app.get('/api/weather', authenticateToken, async (req, res) => {
 
     // Dynamic AI weather recommendations from Gemini
     let recommendation = '';
-    const GEMINI_API_KEY = process.env.VITE_GEMINI_API_KEY || '';
+    const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
     const isKeyValid = GEMINI_API_KEY.startsWith('AIzaSy') || GEMINI_API_KEY.startsWith('AQ');
 
     if (GEMINI_API_KEY && isKeyValid) {
@@ -2246,6 +2319,33 @@ const seedAdminUser = async () => {
     console.error('⚠️ Error seeding admin user:', err.message);
   }
 };
+
+app.get('/api/debug', async (req, res) => {
+  const mongoState = mongoose.connection.readyState;
+  let localDbWritable = false;
+  let writeError = null;
+  
+  try {
+    const testPath = path.join(__dirname, 'test-write.json');
+    fs.writeFileSync(testPath, JSON.stringify({ test: true }));
+    fs.unlinkSync(testPath);
+    localDbWritable = true;
+  } catch (e) {
+    writeError = e.message;
+  }
+
+  res.json({
+    mongoConnected: mongoState === 1,
+    mongoReadyState: mongoState,
+    localDbWritable,
+    writeError,
+    env: {
+      hasMongoUri: !!process.env.MONGODB_URI,
+      hasGeminiKey: !!process.env.VITE_GEMINI_API_KEY,
+      hasWeatherKey: !!process.env.VITE_OPENWEATHERMAP_API_KEY
+    }
+  });
+});
 
 // Server Listen
 app.listen(PORT, () => {

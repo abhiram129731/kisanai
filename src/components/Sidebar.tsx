@@ -28,19 +28,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed, setCollapsed }) => 
   const { t } = useLanguage();
   const { user } = useAuth();
 
-  const menuItems = [
-    { path: '/dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
-    { path: '/farms', label: t('nav.myFarms'), icon: Sprout },
-    { path: '/weather', label: t('nav.weather'), icon: CloudSun },
-    { path: '/disease', label: t('nav.disease'), icon: Camera },
-    { path: '/copilot', label: t('nav.aiCopilot'), icon: Bot },
-    { path: '/cashbook', label: t('nav.cashbook'), icon: Wallet },
-    { path: '/analytics', label: t('nav.analytics'), icon: BarChart3 },
-    { path: '/community', label: t('nav.community'), icon: Users },
-    { path: '/reports', label: t('nav.reports'), icon: FileText },
-    { path: '/profile', label: t('nav.profile'), icon: User },
-    ...(user?.role === 'admin' ? [{ path: '/admin', label: 'Admin Panel', icon: Shield }] : [])
-  ];
+  const menuItems = user?.role === 'admin'
+    ? [
+        { path: '/admin', label: 'Admin Panel', icon: Shield },
+        { path: '/profile', label: t('nav.profile'), icon: User }
+      ]
+    : [
+        { path: '/dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
+        { path: '/farms', label: t('nav.myFarms'), icon: Sprout },
+        { path: '/weather', label: t('nav.weather'), icon: CloudSun },
+        { path: '/disease', label: t('nav.disease'), icon: Camera },
+        { path: '/copilot', label: t('nav.aiCopilot'), icon: Bot },
+        { path: '/cashbook', label: t('nav.cashbook'), icon: Wallet },
+        { path: '/analytics', label: t('nav.analytics'), icon: BarChart3 },
+        { path: '/community', label: t('nav.community'), icon: Users },
+        { path: '/reports', label: t('nav.reports'), icon: FileText },
+        { path: '/profile', label: t('nav.profile'), icon: User }
+      ];
 
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>

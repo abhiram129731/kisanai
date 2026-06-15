@@ -137,6 +137,12 @@ export const api = {
     }),
     deleteUser: (uid: string) => request(`/admin/users/${uid}/delete`, {
       method: 'POST'
+    }),
+    getInquiries: () => request('/admin/inquiries', {
+      method: 'GET'
+    }),
+    deleteInquiry: (id: string) => request(`/admin/inquiries/${id}/delete`, {
+      method: 'POST'
     })
   },
 
