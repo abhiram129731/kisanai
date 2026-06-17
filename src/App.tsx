@@ -33,6 +33,7 @@ import { Community } from './pages/protected/Community';
 import { Reports } from './pages/protected/Reports';
 import { Profile } from './pages/protected/Profile';
 import { AdminDashboard } from './pages/protected/AdminDashboard';
+import { Schemes } from './pages/protected/Schemes';
 
 // Protected Route Guard
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -173,6 +174,7 @@ const AppContent: React.FC = () => {
           <Route path="/weather" element={<FarmerRoute><Weather /></FarmerRoute>} />
           <Route path="/disease" element={<FarmerRoute><DiseaseDetection /></FarmerRoute>} />
           <Route path="/copilot" element={<FarmerRoute><AICopilot /></FarmerRoute>} />
+          <Route path="/schemes" element={<FarmerRoute><Schemes /></FarmerRoute>} />
           <Route path="/cashbook" element={<FarmerRoute><Cashbook /></FarmerRoute>} />
           <Route path="/analytics" element={<FarmerRoute><Dashboard /></FarmerRoute>} />
           <Route path="/community" element={<FarmerRoute><Community /></FarmerRoute>} />

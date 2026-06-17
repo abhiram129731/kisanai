@@ -5,12 +5,12 @@ import { api } from '../../services/api';
 import { motion } from 'framer-motion';
 import { 
   CloudSun, CloudRain, Wind, Droplets, Sun, 
-  AlertTriangle, Lightbulb, RefreshCw, Clock 
+  AlertTriangle, Lightbulb, RefreshCw, Clock, Activity, Eye 
 } from 'lucide-react';
 
 export const Weather: React.FC = () => {
   const { farms } = useFarms();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const [selectedFarmId, setSelectedFarmId] = useState<string>(farms[0]?.id || 'current_gps');
 
   const activeFarm = useMemo(() => {
@@ -32,7 +32,7 @@ export const Weather: React.FC = () => {
 
     const loadWeather = async (lat: number, lng: number, crop: string) => {
       try {
-        const data = await api.weather.get(lat, lng, crop);
+        const data = await api.weather.get(lat, lng, crop, language);
         setWeatherData(data);
         setLastRefreshed(new Date());
         setError(null);
@@ -81,7 +81,7 @@ export const Weather: React.FC = () => {
     }, 300000); // 300,000ms = 5 minutes
 
     return () => clearInterval(intervalId);
-  }, [selectedFarmId]);
+  }, [selectedFarmId, language]);
 
   if (loading) {
     return (
@@ -210,6 +210,24 @@ export const Weather: React.FC = () => {
                 </div>
                 <div className="index-val">{weatherData.uvIndex} / 10</div>
                 <div className="progress-bar-bg"><div className="progress-bar-fill orange-bg" style={{ width: `${(weatherData.uvIndex / 10) * 100}%` }}></div></div>
+              </div>
+
+              <div className="index-card glass-card">
+                <div className="index-header flex-between">
+                  <span className="index-label">Atmospheric Pressure</span>
+                  <Activity size={20} className="index-icon purple-color" style={{ color: '#a855f7' }} />
+                </div>
+                <div className="index-val">{weatherData.pressure || 1012} hPa</div>
+                <div className="progress-bar-bg"><div className="progress-bar-fill purple-bg" style={{ width: `${Math.min((((weatherData.pressure || 1012) - 950) / 100) * 100, 100)}%`, backgroundColor: '#a855f7' }}></div></div>
+              </div>
+
+              <div className="index-card glass-card">
+                <div className="index-header flex-between">
+                  <span className="index-label">Visibility</span>
+                  <Eye size={20} className="index-icon teal-color" style={{ color: '#06b6d4' }} />
+                </div>
+                <div className="index-val">{weatherData.visibility || 10} km</div>
+                <div className="progress-bar-bg"><div className="progress-bar-fill teal-bg" style={{ width: `${Math.min(((weatherData.visibility || 10) / 10) * 100, 100)}%`, backgroundColor: '#06b6d4' }}></div></div>
               </div>
             </div>
           </section>

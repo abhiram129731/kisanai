@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLanguage } from '../../context/LanguageContext';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Bot, Send, Mic, Volume2, Sparkles, AlertCircle, 
@@ -8,6 +8,59 @@ import {
   MapPin, CloudSun, Calendar, HelpCircle
 } from 'lucide-react';
 import { api } from '../../services/api';
+
+const VOICE_COMMAND_RESPONSES: Record<string, Record<string, string>> = {
+  en: {
+    weather: "Opening weather monitoring.",
+    disease: "Opening crop disease scanner.",
+    farms: "Opening your farms list."
+  },
+  te: {
+    weather: "వాతావరణ పర్యవేక్షణను తెరుస్తున్నాను.",
+    disease: "పంట తెగుళ్ల స్కానర్‌ను తెరుస్తున్నాను.",
+    farms: "మీ పొలాల జాబితాను తెరుస్తున్నాను."
+  },
+  hi: {
+    weather: "मौसम की जानकारी खोल रहा हूँ।",
+    disease: "फसल रोग स्कैनर खोल रहा हूँ।",
+    farms: "आपके खेतों की सूची खोल रहा हूँ।"
+  },
+  ta: {
+    weather: "வானிலை தகவலைத் திறக்கிறேன்.",
+    disease: "பயிர் நோய் கண்டறிதலைத் திறக்கிறேன்.",
+    farms: "உங்கள் பண்ணைகள் பட்டியலைத் திறக்கிறேன்."
+  },
+  kn: {
+    weather: "ಹವಾಮಾನ ಮಾಹಿತಿಯನ್ನು ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    disease: "ಬೆಳೆ ರೋಗ ಪತ್ತೆ ಹಚ್ಚುವಿಕೆಯನ್ನು ತೆರೆಯಲಾಗುತ್ತಿದೆ.",
+    farms: "ನಿಮ್ಮ ಜಮೀನುಗಳ ಪಟ್ಟಿಯನ್ನು ತೆರೆಯಲಾಗುತ್ತಿದೆ."
+  },
+  mr: {
+    weather: "हवामान माहिती उघडत आहे.",
+    disease: "पीक रोग निदान उघडत आहे.",
+    farms: "तुमच्या शेतांची यादी उघडत आहे."
+  },
+  gu: {
+    weather: "હવામાન મોનિટરિંગ ખોલી રહ્યું છે.",
+    disease: "પાક રોગ સ્કેનર ખોલી રહ્યું છે.",
+    farms: "તમારા ખેતરોની સૂચિ ખોલી રહ્યું છે."
+  },
+  bn: {
+    weather: "আবহাওয়া পর্যবেক্ষণ খোলা হচ্ছে।",
+    disease: "ফসল রোগ স্ক্যানার খোলা হচ্ছে।",
+    farms: "আপনার খামারের তালিকা খোলা হচ্ছে।"
+  },
+  pa: {
+    weather: "ਮੌਸਮ ਦੀ ਨਿਗਰਾਨੀ ਖੋਲ੍ਹ ਰਿਹਾ ਹੈ।",
+    disease: "ਫ਼ਸਲ ਦੀ ਬੀਮਾਰੀ ਦਾ ਸਕੈਨਰ ਖੋਲ੍ਹ ਰਿਹਾ ਹੈ।",
+    farms: "ਤੁਹਾਡੇ ਖੇਤਾਂ ਦੀ ਸੂਚੀ ਖੋਲ੍ਹ ਰਿਹਾ ਹੈ।"
+  },
+  ml: {
+    weather: "കാലാവസ്ഥാ നിരീക്ഷണം തുറക്കുന്നു.",
+    disease: "വിള രോഗ സ്കാനർ തുറക്കുന്നു.",
+    farms: "നിങ്ങളുടെ ഫാമുകളുടെ ലിസ്റ്റ് തുറക്കുന്നു."
+  }
+};
 
 interface ChatMessage {
   _id?: string;
@@ -51,6 +104,22 @@ export const AICopilot: React.FC = () => {
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const [listening, setListening] = useState(false);
   const [autoVoiceReplies, setAutoVoiceReplies] = useState(false);
+
+  // Alexa Voice assistant states
+  const [showVoiceAssistant, setShowVoiceAssistant] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<'idle' | 'listening' | 'processing' | 'speaking'>('idle');
+  const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [continuousVoice, setContinuousVoice] = useState(false);
+  const [voiceChatHistory, setVoiceChatHistory] = useState<{ sender: 'user' | 'bot'; text: string }[]>([]);
+  const voiceScrollRef = useRef<HTMLDivElement | null>(null);
+  const assistantRecognitionRef = useRef<any>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (voiceScrollRef.current) {
+      voiceScrollRef.current.scrollTop = voiceScrollRef.current.scrollHeight;
+    }
+  }, [voiceChatHistory, voiceStatus]);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -150,6 +219,13 @@ export const AICopilot: React.FC = () => {
     switch (lang) {
       case 'te': return 'te-IN';
       case 'hi': return 'hi-IN';
+      case 'ta': return 'ta-IN';
+      case 'kn': return 'kn-IN';
+      case 'mr': return 'mr-IN';
+      case 'gu': return 'gu-IN';
+      case 'bn': return 'bn-IN';
+      case 'pa': return 'pa-IN';
+      case 'ml': return 'ml-IN';
       default: return 'en-IN';
     }
   };
@@ -360,6 +436,230 @@ export const AICopilot: React.FC = () => {
     }
   };
 
+  const startAssistantListening = () => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert("Speech recognition is not supported on this browser. Try Google Chrome.");
+      return;
+    }
+    
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = getLanguageLocale(language);
+
+      recognition.onstart = () => {
+        setVoiceStatus('listening');
+        setVoiceTranscript('Listening to you...');
+      };
+
+      recognition.onresult = async (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        if (transcript) {
+          setVoiceTranscript(transcript);
+          setVoiceChatHistory(prev => [...prev, { sender: 'user', text: transcript }]);
+          setVoiceStatus('processing');
+          await handleVoiceCommand(transcript);
+        }
+      };
+
+      recognition.onerror = (e: any) => {
+        console.error("Assistant recognition error:", e);
+        setVoiceStatus('idle');
+        setVoiceTranscript("Sorry, I didn't catch that. Tap the mic to retry.");
+      };
+
+      recognition.onend = () => {
+        setVoiceStatus(prev => prev === 'listening' ? 'idle' : prev);
+      };
+
+      assistantRecognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.error("Speech recognition startup failure:", err);
+    }
+  };
+
+  const handleVoiceCommand = async (text: string) => {
+    const lowerText = text.toLowerCase().trim();
+    const activeLang = VOICE_COMMAND_RESPONSES[language] ? language : 'en';
+
+    // Navigation triggers (all 10 languages)
+    const isWeather = lowerText.includes('weather') || 
+                      lowerText.includes('వాతావరణ') || 
+                      lowerText.includes('मौसम') || 
+                      lowerText.includes('வானிலை') || 
+                      lowerText.includes('ಹವಾಮಾನ') || 
+                      lowerText.includes('हवामान') || 
+                      lowerText.includes('હવામાન') || 
+                      lowerText.includes('আবহাওয়া') || 
+                      lowerText.includes('ਮੌਸਮ') || 
+                      lowerText.includes('കാലാവസ്ഥ');
+
+    const isDisease = lowerText.includes('disease') || 
+                      lowerText.includes('scan') || 
+                      lowerText.includes('scans') ||
+                      lowerText.includes('తెగులు') || 
+                      lowerText.includes('రోగం') || 
+                      lowerText.includes('స్కాన్') || 
+                      lowerText.includes('रोग') || 
+                      lowerText.includes('बीमारी') || 
+                      lowerText.includes('स्कैन') || 
+                      lowerText.includes('நோய்') || 
+                      lowerText.includes('ஸ்கேன்') || 
+                      lowerText.includes('ರೋಗ') || 
+                      lowerText.includes('ಆಜಾರ') || 
+                      lowerText.includes('आजारी') || 
+                      lowerText.includes('स्कॅन') || 
+                      lowerText.includes('રોગ') || 
+                      lowerText.includes('સ્કેન') || 
+                      lowerText.includes('ব্যাধি') || 
+                      lowerText.includes('ਬਿਮਾਰੀ') || 
+                      lowerText.includes('ਸਕੈਨ') || 
+                      lowerText.includes('രോഗം') || 
+                      lowerText.includes('സ്കാൻ');
+
+    const isFarms = lowerText.includes('farm') || 
+                    lowerText.includes('plot') || 
+                    lowerText.includes('farms') ||
+                    lowerText.includes('పొలం') || 
+                    lowerText.includes('పొలాలు') || 
+                    lowerText.includes('ఫామ్') || 
+                    lowerText.includes('खेत') || 
+                    lowerText.includes('फार्म') || 
+                    lowerText.includes('பண்ணை') || 
+                    lowerText.includes('பண்ணைகள்') || 
+                    lowerText.includes('பார்ம்') || 
+                    lowerText.includes('ಜಮೀನು') || 
+                    lowerText.includes('ತೋಟ') || 
+                    lowerText.includes('शेत') || 
+                    lowerText.includes('ખેતર') || 
+                    lowerText.includes('ફાર્મ') || 
+                    lowerText.includes('খামার') || 
+                    lowerText.includes('জমি') || 
+                    lowerText.includes('ਖੇਤ') || 
+                    lowerText.includes('ਫਾਰਮ') || 
+                    lowerText.includes('കൃഷി') || 
+                    lowerText.includes('ഫാം');
+    
+    if (isWeather) {
+      const resp = VOICE_COMMAND_RESPONSES[activeLang]?.weather || "Opening weather dashboard.";
+      setVoiceChatHistory(prev => [...prev, { sender: 'bot', text: resp }]);
+      speakAssistantResponse(resp, () => {
+        setShowVoiceAssistant(false);
+        navigate('/weather');
+      });
+      return;
+    }
+    
+    if (isDisease) {
+      const resp = VOICE_COMMAND_RESPONSES[activeLang]?.disease || "Opening crop disease scanner.";
+      setVoiceChatHistory(prev => [...prev, { sender: 'bot', text: resp }]);
+      speakAssistantResponse(resp, () => {
+        setShowVoiceAssistant(false);
+        navigate('/disease');
+      });
+      return;
+    }
+    
+    if (isFarms) {
+      const resp = VOICE_COMMAND_RESPONSES[activeLang]?.farms || "Opening your farms.";
+      setVoiceChatHistory(prev => [...prev, { sender: 'bot', text: resp }]);
+      speakAssistantResponse(resp, () => {
+        setShowVoiceAssistant(false);
+        navigate('/farms');
+      });
+      return;
+    }
+
+    // General AI query
+    let targetConvId = activeConversationId;
+    if (!targetConvId) {
+      try {
+        const newConv = await api.chat.createConversation('Voice Assistant Chat');
+        setConversations(prev => [newConv, ...prev]);
+        targetConvId = newConv._id;
+        setActiveConversationId(newConv._id);
+      } catch (err) {
+        console.error(err);
+        setVoiceStatus('idle');
+        const errMsg = "Connection error. Please try again.";
+        setVoiceTranscript(errMsg);
+        setVoiceChatHistory(prev => [...prev, { sender: 'bot', text: errMsg }]);
+        return;
+      }
+    }
+
+    const tempUserMsg: ChatMessage = {
+      id: 'temp-usr-' + Date.now(),
+      sender: 'user',
+      text: text,
+      date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    setMessages(prev => [...prev, tempUserMsg]);
+
+    try {
+      const data = await api.chat.sendMessage(targetConvId!, text, language);
+      setMessages(data.conversation.messages || []);
+      setConversations(prev => prev.map(c => c._id === targetConvId ? data.conversation : c));
+      
+      if (data.botMessage && data.botMessage.text) {
+        setVoiceTranscript(data.botMessage.text);
+        setVoiceChatHistory(prev => [...prev, { sender: 'bot', text: data.botMessage.text }]);
+        speakAssistantResponse(data.botMessage.text);
+      } else {
+        setVoiceStatus('idle');
+        const errMsg = "No answer received.";
+        setVoiceTranscript(errMsg);
+        setVoiceChatHistory(prev => [...prev, { sender: 'bot', text: errMsg }]);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setVoiceStatus('idle');
+      const errMsg = `Error connecting to AI: ${err.message || 'Please try again.'}`;
+      setVoiceTranscript(errMsg);
+      setVoiceChatHistory(prev => [...prev, { sender: 'bot', text: errMsg }]);
+    }
+  };
+
+  const speakAssistantResponse = (text: string, onEndCallback?: () => void) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = getLanguageLocale(language);
+
+      utterance.onstart = () => {
+        setVoiceStatus('speaking');
+      };
+
+      utterance.onend = () => {
+        setVoiceStatus('idle');
+        if (onEndCallback) {
+          onEndCallback();
+        } else if (continuousVoice) {
+          setTimeout(() => {
+            startAssistantListening();
+          }, 600);
+        }
+      };
+
+      utterance.onerror = () => {
+        setVoiceStatus('idle');
+        if (onEndCallback) onEndCallback();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } else {
+      setVoiceStatus('idle');
+      if (onEndCallback) onEndCallback();
+    }
+  };
+
   return (
     <div className="copilot-page-layout">
       {/* Upper header */}
@@ -374,6 +674,19 @@ export const AICopilot: React.FC = () => {
           </div>
         </div>
         <div className="flex-center" style={{ gap: '1.25rem' }}>
+          <button 
+            type="button"
+            className="btn btn-primary flex-center"
+            onClick={() => {
+              setShowVoiceAssistant(true);
+              setTimeout(() => {
+                startAssistantListening();
+              }, 300);
+            }}
+            style={{ gap: '0.4rem', backgroundColor: '#3b82f6', border: 'none', fontWeight: 800 }}
+          >
+            <Mic size={16} /> Wake Voice Assistant
+          </button>
           <label className="voice-toggle-label flex-center">
             <input 
               type="checkbox" 
@@ -1188,10 +1501,234 @@ export const AICopilot: React.FC = () => {
           gap: 0.5rem;
         }
 
-        /* Dot Loading anim */
-        .dot-loading {
+        /* Voice Assistant Alexa Style Visualizer Animations & Styling */
+        .alexa-device-container {
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          margin: 0.5rem 0;
+          position: relative;
+          width: 160px;
+          height: 160px;
+        }
+
+        .alexa-outer-shadow {
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          border-radius: 50%;
+          background: transparent;
+          transition: all 0.5s ease;
+          pointer-events: none;
+        }
+
+        .alexa-outer-shadow.idle {
+          box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
+        }
+        .alexa-outer-shadow.listening {
+          box-shadow: 0 0 35px rgba(16, 185, 129, 0.35);
+        }
+        .alexa-outer-shadow.processing {
+          box-shadow: 0 0 30px rgba(99, 102, 241, 0.25);
+        }
+        .alexa-outer-shadow.speaking {
+          box-shadow: 0 0 40px rgba(6, 182, 212, 0.45);
+        }
+
+        .alexa-light-ring {
+          position: relative;
+          width: 120px;
+          height: 120px;
+          border-radius: 50%;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          padding: 5px;
+          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          background: #111827;
+        }
+
+        .alexa-light-ring.idle {
+          background: radial-gradient(circle, #1f2937 70%, #1d4ed8 100%);
+          animation: alexa-idle 4s infinite ease-in-out;
+        }
+
+        .alexa-light-ring.listening {
+          background: radial-gradient(circle, #1f2937 60%, #10b981 90%, #06b6d4 100%);
+          animation: alexa-listening 1.4s infinite ease-in-out;
+        }
+
+        .alexa-light-ring.processing::before {
+          content: '';
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          border-radius: 50%;
+          padding: 5px;
+          background: conic-gradient(from 0deg, transparent 20%, #6366f1 50%, #06b6d4 80%, #10b981 100%);
+          -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+          -webkit-mask-composite: xor;
+          mask-composite: exclude;
+          animation: alexa-processing 1.2s infinite linear;
+        }
+
+        .alexa-light-ring.speaking {
+          background: radial-gradient(circle, #1f2937 65%, #3b82f6 90%, #6366f1 100%);
+          animation: alexa-speaking 0.8s infinite alternate ease-in-out;
+        }
+
+        .alexa-center-core {
+          width: 100%;
+          height: 100%;
+          border-radius: 50%;
+          background: radial-gradient(circle at 30% 30%, #374151 0%, #111827 80%, #030712 100%);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          color: #ffffff;
+          cursor: pointer;
+          z-index: 10;
+          box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.1), 0 4px 8px rgba(0, 0, 0, 0.5);
+          transition: all 0.3s ease;
+          border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .alexa-center-core:hover {
+          transform: scale(1.02);
+        }
+
+        .alexa-center-core.listening {
+          color: #10b981;
+        }
+
+        .alexa-center-core.speaking {
+          color: #3b82f6;
+        }
+
+        .alexa-ripple-ring {
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          border-radius: 50%;
+          pointer-events: none;
+          opacity: 0;
+        }
+
+        .alexa-ripple-ring.r1 {
+          border: 2px solid rgba(16, 185, 129, 0.3);
+          animation: alexa-ripple 2.5s infinite linear;
+        }
+
+        .alexa-ripple-ring.r2 {
+          border: 2px solid rgba(6, 182, 212, 0.2);
+          animation: alexa-ripple 2.5s infinite linear;
+          animation-delay: 1.25s;
+        }
+
+        .alexa-status-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 0.45rem;
+          padding: 0.35rem 0.85rem;
+          border-radius: var(--radius-full);
+          background-color: var(--bg-secondary);
+          border: 1px solid var(--border-color);
+          font-size: 0.75rem;
+          font-weight: 700;
+        }
+
+        .status-dot {
           width: 8px;
           height: 8px;
+          border-radius: 50%;
+          background-color: var(--text-muted);
+        }
+
+        .status-dot.listening {
+          background-color: #10b981;
+          box-shadow: 0 0 8px #10b981;
+        }
+
+        .status-dot.processing {
+          background-color: #6366f1;
+          box-shadow: 0 0 8px #6366f1;
+        }
+
+        .status-dot.speaking {
+          background-color: #3b82f6;
+          box-shadow: 0 0 8px #3b82f6;
+        }
+
+        .alexa-waveform {
+          display: flex;
+          align-items: center;
+          gap: 3px;
+          height: 20px;
+        }
+
+        .alexa-wave-bar {
+          width: 3px;
+          height: 6px;
+          background-color: #3b82f6;
+          border-radius: 2px;
+          animation: alexa-wave-bounce 0.8s infinite ease-in-out alternate;
+        }
+
+        .alexa-wave-bar:nth-child(2) { animation-delay: 0.15s; background-color: #60a5fa; }
+        .alexa-wave-bar:nth-child(3) { animation-delay: 0.3s; background-color: #93c5fd; }
+        .alexa-wave-bar:nth-child(4) { animation-delay: 0.45s; background-color: #60a5fa; }
+        .alexa-wave-bar:nth-child(5) { animation-delay: 0.6s; background-color: #3b82f6; }
+
+        .dot-loading-swirl {
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          border: 3px solid rgba(255, 255, 255, 0.2);
+          border-top-color: #ffffff;
+          animation: alexa-processing 1s infinite linear;
+        }
+
+        /* Voice Chat Dialogue Bubble overrides */
+        .voice-bubble.user {
+          border-top-right-radius: 2px !important;
+        }
+
+        .voice-bubble.bot {
+          border-top-left-radius: 2px !important;
+        }
+
+        /* Animations keyframes */
+        @keyframes alexa-idle {
+          0%, 100% { box-shadow: 0 0 15px rgba(59, 130, 246, 0.3), inset 0 0 10px rgba(59, 130, 246, 0.1); }
+          50% { box-shadow: 0 0 25px rgba(59, 130, 246, 0.5), inset 0 0 15px rgba(59, 130, 246, 0.2); }
+        }
+
+        @keyframes alexa-listening {
+          0%, 100% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.4), 0 0 0 2px rgba(6, 182, 212, 0.2); }
+          50% { box-shadow: 0 0 35px rgba(16, 185, 129, 0.7), 0 0 0 6px rgba(6, 182, 212, 0.4); }
+        }
+
+        @keyframes alexa-processing {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        @keyframes alexa-speaking {
+          0%, 100% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.5), 0 0 0 2px rgba(99, 102, 241, 0.2); transform: scale(1); }
+          50% { box-shadow: 0 0 30px rgba(59, 130, 246, 0.75), 0 0 0 6px rgba(99, 102, 241, 0.4); transform: scale(1.02); }
+        }
+
+        @keyframes alexa-ripple {
+          0% { transform: scale(0.85); opacity: 1; }
+          100% { transform: scale(1.35); opacity: 0; }
+        }
+
+        @keyframes alexa-wave-bounce {
+          0% { height: 6px; }
+          100% { height: 20px; }
+        }
+
+        /* Dot Loading anim */
+        .dot-loading {
+          width: 6px;
+          height: 6px;
           background-color: var(--text-muted);
           border-radius: var(--radius-full);
           animation: dotLoading 1s infinite alternate;
@@ -1221,6 +1758,250 @@ export const AICopilot: React.FC = () => {
           }
         }
       `}</style>
+
+      {/* Alexa Style Kisan Voice AI Modal */}
+      <AnimatePresence>
+        {showVoiceAssistant && (
+          <motion.div 
+            className="voice-assistant-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed',
+              top: 0, left: 0, right: 0, bottom: 0,
+              backgroundColor: 'rgba(15, 23, 42, 0.85)',
+              backdropFilter: 'blur(12px)',
+              zIndex: 9999,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '2rem'
+            }}
+          >
+            <motion.div 
+              className="voice-assistant-card glass-card"
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              style={{
+                width: '100%',
+                maxWidth: '500px',
+                padding: '3rem 2rem',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                textAlign: 'center',
+                position: 'relative',
+                gap: '2rem',
+                backgroundColor: 'var(--bg-primary)',
+                border: '1px solid var(--border-color)',
+                boxShadow: 'var(--shadow-lg)',
+                borderRadius: 'var(--radius-lg)'
+              }}
+            >
+              <button 
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setShowVoiceAssistant(false);
+                  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                  if (assistantRecognitionRef.current) assistantRecognitionRef.current.stop();
+                }}
+                style={{
+                  position: 'absolute',
+                  top: '20px',
+                  right: '20px',
+                  border: 'none',
+                  padding: '0.4rem 0.8rem',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                Close
+              </button>
+
+              <div className="voice-title-header">
+                <h3 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Kisan Voice AI</h3>
+                <p className="text-muted" style={{ fontSize: '0.85rem' }}>Hands-Free Agri Assistant</p>
+              </div>
+
+              {/* Alexa Ring Visualizer */}
+              <div className="alexa-device-container">
+                <div className={`alexa-outer-shadow ${voiceStatus}`}></div>
+                
+                {/* Ripples for listening and speaking */}
+                {voiceStatus === 'listening' && (
+                  <>
+                    <div className="alexa-ripple-ring r1"></div>
+                    <div className="alexa-ripple-ring r2"></div>
+                  </>
+                )}
+                {voiceStatus === 'speaking' && (
+                  <>
+                    <div className="alexa-ripple-ring r1" style={{ borderColor: 'rgba(59, 130, 246, 0.3)' }}></div>
+                    <div className="alexa-ripple-ring r2" style={{ borderColor: 'rgba(99, 102, 241, 0.2)' }}></div>
+                  </>
+                )}
+                
+                <div className={`alexa-light-ring ${voiceStatus}`}>
+                  <div 
+                    className={`alexa-center-core ${voiceStatus}`}
+                    onClick={() => {
+                      if (voiceStatus === 'idle') startAssistantListening();
+                      else if (voiceStatus === 'listening') {
+                        if (assistantRecognitionRef.current) assistantRecognitionRef.current.stop();
+                      } else {
+                        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                        setVoiceStatus('idle');
+                      }
+                    }}
+                  >
+                    {voiceStatus === 'listening' && <Mic size={32} className="animate-pulse" />}
+                    {voiceStatus === 'processing' && <span className="dot-loading-swirl"></span>}
+                    {voiceStatus === 'speaking' && (
+                      <div className="alexa-waveform">
+                        <span className="alexa-wave-bar"></span>
+                        <span className="alexa-wave-bar"></span>
+                        <span className="alexa-wave-bar"></span>
+                        <span className="alexa-wave-bar"></span>
+                        <span className="alexa-wave-bar"></span>
+                      </div>
+                    )}
+                    {voiceStatus === 'idle' && <Mic size={32} style={{ opacity: 0.6 }} />}
+                  </div>
+                </div>
+              </div>
+
+              {/* Status Badge */}
+              <div className="alexa-status-badge">
+                <span className={`status-dot ${voiceStatus}`}></span>
+                <span className="status-label">
+                  {voiceStatus === 'listening' ? 'Listening...' : 
+                   voiceStatus === 'processing' ? 'Thinking...' : 
+                   voiceStatus === 'speaking' ? 'Responding...' : 'Tap to talk'}
+                </span>
+              </div>
+
+              {/* Voice Subtitles Caption */}
+              <div className="voice-subtitle-caption" style={{ minHeight: '24px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                {voiceStatus === 'listening' && <span>"Speak now..."</span>}
+                {voiceStatus === 'processing' && <span>Gemini is composing response...</span>}
+                {voiceStatus === 'speaking' && <span className="truncate" style={{ maxWidth: '350px', display: 'inline-block' }}>Reading reply aloud...</span>}
+                {voiceStatus === 'idle' && <span>Tap the mic to start speaking</span>}
+              </div>
+
+              {/* Live Dialogue stream inside Voice Assistant Modal */}
+              <div 
+                className="voice-dialogue-scroller" 
+                ref={voiceScrollRef}
+                style={{
+                  width: '100%',
+                  height: '180px',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.85rem',
+                  padding: '1rem',
+                  backgroundColor: 'var(--bg-secondary)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1.5px solid var(--border-color)',
+                  textAlign: 'left'
+                }}
+              >
+                {voiceChatHistory.length === 0 ? (
+                  <div className="flex-center flex-column" style={{ margin: 'auto', gap: '0.5rem', opacity: 0.5 }}>
+                    <Bot size={28} />
+                    <p style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                      How can I help you today?
+                    </p>
+                  </div>
+                ) : (
+                  voiceChatHistory.map((item, idx) => (
+                    <div 
+                      key={idx} 
+                      className={`voice-bubble ${item.sender}`} 
+                      style={{
+                        padding: '0.65rem 0.85rem',
+                        borderRadius: 'var(--radius-md)',
+                        fontSize: '0.85rem',
+                        lineHeight: '1.4',
+                        maxWidth: '85%',
+                        alignSelf: item.sender === 'user' ? 'flex-end' : 'flex-start',
+                        backgroundColor: item.sender === 'user' ? 'var(--color-primary)' : 'var(--bg-primary)',
+                        color: item.sender === 'user' ? '#ffffff' : 'var(--text-primary)',
+                        border: item.sender === 'user' ? 'none' : '1px solid var(--border-color)',
+                        boxShadow: 'var(--shadow-sm)',
+                        whiteSpace: 'pre-wrap'
+                      }}
+                    >
+                      <strong style={{ display: 'block', fontSize: '0.75rem', marginBottom: '0.15rem', opacity: 0.8 }}>
+                        {item.sender === 'user' ? 'You' : 'Kisan AI'}
+                      </strong>
+                      <span>{item.text}</span>
+                    </div>
+                  ))
+                )}
+                {voiceStatus === 'processing' && (
+                  <div 
+                    className="voice-bubble bot" 
+                    style={{
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: 'var(--radius-md)',
+                      fontSize: '0.85rem',
+                      alignSelf: 'flex-start',
+                      backgroundColor: 'var(--bg-primary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-color)',
+                      boxShadow: 'var(--shadow-sm)'
+                    }}
+                  >
+                    <strong style={{ display: 'block', fontSize: '0.75rem', marginBottom: '0.25rem', opacity: 0.8 }}>
+                      Kisan AI
+                    </strong>
+                    <div className="flex-center" style={{ gap: '0.25rem', width: '30px', height: '10px' }}>
+                      <span className="dot-loading"></span>
+                      <span className="dot-loading" style={{ animationDelay: '0.2s' }}></span>
+                      <span className="dot-loading" style={{ animationDelay: '0.4s' }}></span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Controls bar */}
+              <div className="voice-controls-panel flex-column" style={{ width: '100%', gap: '1rem', borderTop: '1px solid var(--border-color)', paddingTop: '1.5rem' }}>
+                <div className="flex-between" style={{ width: '100%', fontSize: '0.85rem' }}>
+                  <label className="voice-toggle-label flex-center" style={{ gap: '0.4rem', cursor: 'pointer' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={continuousVoice} 
+                      onChange={(e) => setContinuousVoice(e.target.checked)}
+                      style={{ accentColor: 'var(--color-primary)', width: '16px', height: '16px' }}
+                    />
+                    <span>🔄 Continuous Conversation</span>
+                  </label>
+
+                  <div className="flex-center" style={{ gap: '0.25rem' }}>
+                    <span className="text-muted">Lang:</span>
+                    <strong style={{ color: 'var(--color-primary)', textTransform: 'uppercase' }}>{language}</strong>
+                  </div>
+                </div>
+
+                <div className="voice-tips-box" style={{ backgroundColor: 'var(--bg-secondary)', padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)', fontSize: '0.75rem', color: 'var(--text-muted)', textAlign: 'left' }}>
+                  <strong>Commands you can speak:</strong>
+                  <ul style={{ paddingLeft: '1.25rem', marginTop: '0.25rem' }}>
+                    <li>"Show today's weather"</li>
+                    <li>"Scan crop disease"</li>
+                    <li>"Open my farms"</li>
+                    <li>"What crop should I grow?"</li>
+                  </ul>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

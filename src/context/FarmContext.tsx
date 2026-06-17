@@ -17,6 +17,7 @@ export interface Farm {
   area: number;
   areaHectares?: number;
   areaSqm?: number;
+  areaSqft?: number;
   perimeter?: number;
   soilType: string;
   irrigationMethod: string;
@@ -120,6 +121,33 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [experts] = useState<Expert[]>([]);
 
+  // Function to fetch community posts separately
+  const loadCommunityPosts = async () => {
+    try {
+      const token = localStorage.getItem('kisan_auth_token');
+      if (token) {
+        const mPosts = await api.community.getAll();
+        const formattedPosts = mPosts.map((p: any) => ({
+          id: p._id,
+          author: p.author,
+          authorId: p.userId,
+          authorRole: p.authorRole,
+          authorAvatar: p.authorAvatar,
+          content: p.content,
+          imageUrl: p.imageUrl,
+          likes: typeof p.likes === 'number' ? p.likes : 0,
+          comments: Array.isArray(p.comments) ? p.comments : [],
+          date: p.date,
+          category: p.category || 'feed'
+        }));
+        setPosts(formattedPosts);
+        localStorage.setItem('kisan_posts_global', JSON.stringify(formattedPosts));
+      }
+    } catch (err) {
+      console.warn("[FarmContext] Failed to load community posts in polling:", err);
+    }
+  };
+
   // Function to load all lists from backend or local cache fallbacks
   const loadData = async () => {
     if (userId === 'guest') {
@@ -145,6 +173,7 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
           area: f.area,
           areaHectares: f.areaHectares,
           areaSqm: f.areaSqm,
+          areaSqft: f.areaSqft,
           perimeter: f.perimeter,
           soilType: f.soilType,
           irrigationMethod: f.irrigationMethod,
@@ -188,22 +217,7 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
         localStorage.setItem(`kisan_disease_${userId}`, JSON.stringify(formattedDisease));
 
         // Query Shared Community forum threads
-        const mPosts = await api.community.getAll();
-        const formattedPosts = mPosts.map((p: any) => ({
-          id: p._id,
-          author: p.author,
-          authorId: p.userId,
-          authorRole: p.authorRole,
-          authorAvatar: p.authorAvatar,
-          content: p.content,
-          imageUrl: p.imageUrl,
-          likes: typeof p.likes === 'number' ? p.likes : 0,
-          comments: Array.isArray(p.comments) ? p.comments : [],
-          date: p.date,
-          category: p.category || 'feed'
-        }));
-        setPosts(formattedPosts);
-        localStorage.setItem('kisan_posts_global', JSON.stringify(formattedPosts));
+        await loadCommunityPosts();
 
         // Derive Alerts dynamically from weather indices, disease scans, etc.
         const derivedAlerts: SmartAlert[] = [];
@@ -265,6 +279,17 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
     loadData();
   }, [userId]);
 
+  useEffect(() => {
+    if (userId === 'guest') return;
+
+    // Polling community posts every 15 seconds
+    const interval = setInterval(() => {
+      loadCommunityPosts();
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [userId]);
+
   // CRUD API Synchronization
 
   const addFarm = async (farmData: Omit<Farm, 'id' | 'timeline'>) => {
@@ -278,6 +303,7 @@ export const FarmProvider: React.FC<{ children: React.ReactNode }> = ({ children
         area: response.area,
         areaHectares: response.areaHectares,
         areaSqm: response.areaSqm,
+        areaSqft: response.areaSqft,
         perimeter: response.perimeter,
         soilType: response.soilType,
         irrigationMethod: response.irrigationMethod,

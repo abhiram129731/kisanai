@@ -3,10 +3,14 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import type { Language } from '../context/LanguageContext';
 import { useFarms } from '../context/FarmContext';
-import { Bell, Sun, Moon, Globe, LogOut, Check, ChevronDown } from 'lucide-react';
+import { Bell, Sun, Moon, Globe, LogOut, Check, ChevronDown, Menu } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-export const Navbar: React.FC = () => {
+interface NavbarProps {
+  onToggleMobileSidebar: () => void;
+}
+
+export const Navbar: React.FC<NavbarProps> = ({ onToggleMobileSidebar }) => {
   const { user, logout } = useAuth();
   const { language, setLanguage, t } = useLanguage();
   const { alerts, markAlertAsRead } = useFarms();
@@ -47,6 +51,14 @@ export const Navbar: React.FC = () => {
   return (
     <header className="navbar">
       <div className="navbar-left">
+        <button 
+          className="mobile-sidebar-toggle" 
+          onClick={onToggleMobileSidebar}
+          title="Open Sidebar"
+          aria-label="Toggle mobile sidebar"
+        >
+          <Menu size={20} />
+        </button>
         <h2 className="navbar-greeting">
           {t('dash.welcome')} {user?.displayName || 'Farmer'}
         </h2>
@@ -210,6 +222,35 @@ export const Navbar: React.FC = () => {
           position: sticky;
           top: 0;
           z-index: 90;
+        }
+
+        .navbar-left {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .mobile-sidebar-toggle {
+          display: none;
+          background: transparent;
+          border: none;
+          color: var(--text-primary);
+          cursor: pointer;
+          align-items: center;
+          justify-content: center;
+          padding: 0.5rem;
+          border-radius: var(--radius-md);
+          transition: background-color var(--transition-fast);
+        }
+
+        .mobile-sidebar-toggle:hover {
+          background-color: var(--bg-secondary);
+        }
+
+        @media (max-width: 768px) {
+          .mobile-sidebar-toggle {
+            display: flex;
+          }
         }
 
         .navbar-greeting {

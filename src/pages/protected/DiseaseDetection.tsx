@@ -1,13 +1,95 @@
 import React, { useState } from 'react';
 import { useFarms } from '../../context/FarmContext';
+import type { DiseaseReport } from '../../context/FarmContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { analyzeCropDisease } from '../../services/gemini';
 import { motion } from 'framer-motion';
 import { Camera, ShieldAlert, CheckCircle, RefreshCw, Send, Users, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
+// Suggested fertilizers brand matcher
+const getSuggestedProducts = (crop: string, disease: string, treatmentText: string = '', fertilizerText: string = '') => {
+  const text = (treatmentText + ' ' + fertilizerText + ' ' + disease + ' ' + crop).toLowerCase();
+  
+  const productsList = [
+    {
+      name: 'Blitox (Copper Oxychloride 50% WP)',
+      type: 'Chemical Fungicide',
+      description: 'Broad-spectrum contact fungicide, highly effective against leaf blights, spots, and downy mildew.',
+      price: '₹280 / 500g',
+      rating: 4.6,
+      image: 'https://images.unsplash.com/photo-1599599810769-bcde5a160d32?auto=format&fit=crop&q=80&w=256',
+      searchQuery: 'Blitox Copper Oxychloride 50 WP packing',
+      keywords: ['copper', 'blitox', 'blight', 'spot', 'downy', 'fungicide']
+    },
+    {
+      name: 'Saaf Fungicide (Carbendazim 12% + Mancozeb 63% WP)',
+      type: 'Systemic & Contact Fungicide',
+      description: 'Trusted combination for controlling blast, leaf spots, and rust in paddy and cotton.',
+      price: '₹340 / 500g',
+      rating: 4.8,
+      image: 'https://images.unsplash.com/photo-1628352081506-83c43123ed6d?auto=format&fit=crop&q=80&w=256',
+      searchQuery: 'UPL Saaf Fungicide packing',
+      keywords: ['saaf', 'mancozeb', 'carbendazim', 'blast', 'rust', 'fungicide']
+    },
+    {
+      name: 'Econeem (Pure Neem Oil 10,000 PPM)',
+      type: 'Organic Bio-Pesticide',
+      description: 'Natural pest controller preventing whiteflies, aphids, and sucking pests on crop leaves.',
+      price: '₹420 / 1L',
+      rating: 4.5,
+      image: 'https://images.unsplash.com/photo-1608571423902-eed4a5ad8108?auto=format&fit=crop&q=80&w=256',
+      searchQuery: 'Econeem Neem Oil agriculture bottle',
+      keywords: ['neem', 'oil', 'organic', 'insecticide', 'pesticide', 'whitefly', 'aphid', 'bug']
+    },
+    {
+      name: 'IFFCO NPK 19-19-19',
+      type: 'Soluble NPK Fertilizer',
+      description: 'Promotes balanced growth, vegetative development, and overall crop vigor.',
+      price: '₹150 / 1kg',
+      rating: 4.7,
+      image: 'https://images.unsplash.com/photo-1585314062340-f1a5a7c9328d?auto=format&fit=crop&q=80&w=256',
+      searchQuery: 'IFFCO NPK 19-19-19 fertilizer bag',
+      keywords: ['npk', 'fertilizer', 'nitrogen', 'phosphorus', 'potassium', 'growth', 'nutrient']
+    },
+    {
+      name: 'Trichoderma Viride Bio-Fungicide',
+      type: 'Organic Bio-Fungicide',
+      description: 'Eco-friendly bio-fungicide protecting roots and soil from fungal attack.',
+      price: '₹180 / 1kg',
+      rating: 4.4,
+      image: 'https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?auto=format&fit=crop&q=80&w=256',
+      searchQuery: 'Trichoderma Viride agricultural packet',
+      keywords: ['trichoderma', 'organic', 'fungicide', 'soil', 'bio', 'rot', 'wilt']
+    },
+    {
+      name: 'Streptocycline (Streptomycin + Tetracycline)',
+      type: 'Antibacterial Medicine',
+      description: 'Antibacterial powder for leaf spots, black arm, and bacterial canker diseases.',
+      price: '₹45 / 6g',
+      rating: 4.6,
+      image: 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&q=80&w=256',
+      searchQuery: 'Streptocycline packet agriculture',
+      keywords: ['streptocycline', 'bacterial', 'canker', 'black arm', 'antibiotic']
+    }
+  ];
+
+  const scored = productsList.map(p => {
+    let score = 0;
+    p.keywords.forEach(kw => {
+      if (text.includes(kw)) score += 1;
+    });
+    if (crop.toLowerCase() === 'cotton' && p.name.includes('Saaf')) score += 0.5;
+    if (crop.toLowerCase() === 'paddy' && p.name.includes('NPK')) score += 0.5;
+    return { ...p, score };
+  });
+
+  const matched = scored.filter(p => p.score > 0).sort((a, b) => b.score - a.score);
+  return matched.length > 0 ? matched.slice(0, 3) : scored.slice(0, 3);
+};
+
 export const DiseaseDetection: React.FC = () => {
-  const { farms, addDiseaseReport, addCommunityPost } = useFarms();
+  const { farms, diseaseReports = [], addDiseaseReport, addCommunityPost } = useFarms();
   const { t, language } = useLanguage();
   const navigate = useNavigate();
 
@@ -16,6 +98,7 @@ export const DiseaseDetection: React.FC = () => {
   const [image, setImage] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [report, setReport] = useState<any | null>(null);
+  const [activeTab, setActiveTab] = useState<'diagnostics' | 'history'>('diagnostics');
 
   // Preloaded crop sample leaf photos for instant demo scanning
   const demoSamples = [
@@ -44,6 +127,7 @@ export const DiseaseDetection: React.FC = () => {
   const handleScan = async () => {
     if (!image) return;
     setScanning(true);
+    setActiveTab('diagnostics');
     
     const cropType = selectedCropType;
 
@@ -53,7 +137,7 @@ export const DiseaseDetection: React.FC = () => {
       
       // Save report in context logs if farm is linked
       if (selectedFarmId) {
-        addDiseaseReport({
+        await addDiseaseReport({
           farmId: selectedFarmId,
           cropType,
           diseaseName: result.diseaseName,
@@ -70,6 +154,14 @@ export const DiseaseDetection: React.FC = () => {
     } finally {
       setScanning(false);
     }
+  };
+
+  const handleSelectHistoryItem = (item: DiseaseReport) => {
+    setReport(item);
+    setImage(item.imageUrl);
+    setSelectedCropType(item.cropType);
+    setSelectedFarmId(item.farmId || '');
+    setActiveTab('diagnostics');
   };
 
   const handleAskCommunity = () => {
@@ -223,78 +315,203 @@ export const DiseaseDetection: React.FC = () => {
           </button>
         </section>
 
-        {/* Right pane: Diagnosis analysis */}
+        {/* Right pane: Diagnosis analysis & History tabs */}
         <section className="scan-results-pane">
-          {scanning ? (
-            <div className="scanner-skeleton-box glass-card flex-column flex-center">
-              <div className="scanner-line"></div>
-              <p className="text-muted">Analyzing cell tissue pigmentation...</p>
-            </div>
-          ) : report ? (
-            <motion.div 
-              className="results-report-card glass-card"
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
+          <div className="tab-header flex" style={{ gap: '1rem', borderBottom: '1px solid var(--border-color)', marginBottom: '1.5rem', width: '100%' }}>
+            <button 
+              className={`tab-btn ${activeTab === 'diagnostics' ? 'active' : ''}`}
+              onClick={() => setActiveTab('diagnostics')}
+              style={{
+                padding: '0.75rem 1rem',
+                fontWeight: 700,
+                fontSize: '0.9rem',
+                borderBottom: activeTab === 'diagnostics' ? '3px solid var(--color-primary)' : '3px solid transparent',
+                color: activeTab === 'diagnostics' ? 'var(--color-primary)' : 'var(--text-muted)',
+                background: 'none',
+                borderTop: 'none',
+                borderLeft: 'none',
+                borderRight: 'none',
+                cursor: 'pointer',
+                transition: 'all var(--transition-fast)'
+              }}
             >
-              <div className="results-header flex-between">
-                <div>
-                  <span className="badge badge-danger flex-center" style={{ gap: '0.25rem' }}>
-                    <ShieldAlert size={14} /> {t('disease.detected')}
-                  </span>
-                  <h2 className="disease-name-label">{report.diseaseName}</h2>
-                  <a 
-                    href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(report.diseaseName + ' ' + selectedCropType + ' disease symptoms treatment medicine')}`} 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="btn btn-outline btn-sm flex-center"
-                    style={{ gap: '0.35rem', marginTop: '0.5rem', display: 'inline-flex', fontSize: '0.8rem', padding: '0.35rem 0.75rem', textDecoration: 'none', color: 'var(--text-primary)' }}
-                  >
-                    🖼️ View Symptoms & Medicine Photos
-                  </a>
-                </div>
-                <div className="confidence-meter text-center">
-                  <span className="confidence-val">{report.confidence}%</span>
-                  <span className="confidence-lbl">{t('disease.confidence')}</span>
-                </div>
+              🔍 Diagnostics
+            </button>
+            <button 
+              className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+              onClick={() => setActiveTab('history')}
+              style={{
+                padding: '0.75rem 1rem',
+                fontWeight: 700,
+                fontSize: '0.9rem',
+                borderBottom: activeTab === 'history' ? '3px solid var(--color-primary)' : '3px solid transparent',
+                color: activeTab === 'history' ? 'var(--color-primary)' : 'var(--text-muted)',
+                background: 'none',
+                borderTop: 'none',
+                borderLeft: 'none',
+                borderRight: 'none',
+                cursor: 'pointer',
+                transition: 'all var(--transition-fast)'
+              }}
+            >
+              📜 Scan History ({diseaseReports.length})
+            </button>
+          </div>
+
+          {activeTab === 'diagnostics' ? (
+            scanning ? (
+              <div className="scanner-skeleton-box glass-card flex-column flex-center">
+                <div className="scanner-line"></div>
+                <p className="text-muted">Analyzing cell tissue pigmentation...</p>
               </div>
-
-              <div className="report-body-paragraphs">
-                <div className="paragraph-block">
-                  <h4>Information</h4>
-                  <p style={{ whiteSpace: 'pre-line' }}>{renderSafeString(report.description)}</p>
-                </div>
-
-                <div className="paragraph-block">
-                  <h4>{t('disease.treatment')}</h4>
-                  <p className="highlighted-treatment" style={{ whiteSpace: 'pre-line' }}>{renderSafeString(report.treatment)}</p>
-                </div>
-
-                <div className="paragraph-block-grid">
-                  <div className="paragraph-block">
-                    <h4>{t('disease.prevention')}</h4>
-                    <p style={{ whiteSpace: 'pre-line' }}>{renderSafeString(report.prevention)}</p>
+            ) : report ? (
+              <motion.div 
+                className="results-report-card glass-card"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+              >
+                <div className="results-header flex-between">
+                  <div>
+                    <span className="badge badge-danger flex-center" style={{ gap: '0.25rem' }}>
+                      <ShieldAlert size={14} /> {t('disease.detected')}
+                    </span>
+                    <h2 className="disease-name-label">{report.diseaseName}</h2>
+                    <a 
+                      href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(report.diseaseName + ' ' + selectedCropType + ' disease symptoms treatment medicine')}`} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="btn btn-outline btn-sm flex-center"
+                      style={{ gap: '0.35rem', marginTop: '0.5rem', display: 'inline-flex', fontSize: '0.8rem', padding: '0.35rem 0.75rem', textDecoration: 'none', color: 'var(--text-primary)' }}
+                    >
+                      🖼️ View Symptoms & Medicine Photos
+                    </a>
                   </div>
-                  <div className="paragraph-block">
-                    <h4>{t('disease.fertilizer')}</h4>
-                    <p style={{ whiteSpace: 'pre-line' }}>{renderSafeString(report.fertilizer)}</p>
+                  <div className="confidence-meter text-center">
+                    <span className="confidence-val">{report.confidence}%</span>
+                    <span className="confidence-lbl">{t('disease.confidence')}</span>
                   </div>
                 </div>
-              </div>
 
-              <div className="results-actions-row flex-between">
-                <button className="btn btn-outline flex-center" onClick={handleAskAi}>
-                  <Sparkles size={16} /> {t('disease.askAi')}
-                </button>
-                <button className="btn btn-secondary flex-center" onClick={handleAskCommunity}>
-                  <Users size={16} /> {t('disease.askCommunity')}
-                </button>
+                <div className="report-body-paragraphs">
+                  <div className="paragraph-block">
+                    <h4>Information</h4>
+                    <p style={{ whiteSpace: 'pre-line' }}>{renderSafeString(report.description)}</p>
+                  </div>
+
+                  <div className="paragraph-block">
+                    <h4>{t('disease.treatment')}</h4>
+                    <p className="highlighted-treatment" style={{ whiteSpace: 'pre-line' }}>{renderSafeString(report.treatment)}</p>
+                  </div>
+
+                  <div className="paragraph-block-grid">
+                    <div className="paragraph-block">
+                      <h4>{t('disease.prevention')}</h4>
+                      <p style={{ whiteSpace: 'pre-line' }}>{renderSafeString(report.prevention)}</p>
+                    </div>
+                    <div className="paragraph-block">
+                      <h4>{t('disease.fertilizer')}</h4>
+                      <p style={{ whiteSpace: 'pre-line' }}>{renderSafeString(report.fertilizer)}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Suggested Fertilizers Visual Product Cards Section */}
+                <div className="fertilizer-recommendations-section" style={{ marginTop: '1.5rem', borderTop: '1px dashed var(--border-color)', paddingTop: '1.5rem' }}>
+                  <h4 style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    💊 Recommended Indian Remedies & Fertilizers
+                  </h4>
+                  <div className="fertilizer-cards-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1.25rem' }}>
+                    {getSuggestedProducts(selectedCropType, report.diseaseName, renderSafeString(report.treatment), renderSafeString(report.fertilizer)).map((prod, pIdx) => (
+                      <div key={pIdx} className="fertilizer-product-card glass-card" style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', transition: 'all var(--transition-fast)' }}>
+                        <div className="product-image-wrapper" style={{ height: '120px', borderRadius: 'var(--radius-sm)', overflow: 'hidden', position: 'relative' }}>
+                          <img src={prod.image} alt={prod.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          <span className="badge badge-info" style={{ position: 'absolute', top: '5px', left: '5px', fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}>{prod.type}</span>
+                        </div>
+                        <h5 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0.25rem 0 0 0', color: 'var(--text-primary)' }}>{prod.name}</h5>
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', margin: 0, flex: 1, lineBreak: 'anywhere' }}>{prod.description}</p>
+                        <div className="product-meta flex-between" style={{ marginTop: '0.5rem', borderTop: '1px solid var(--border-color)', paddingTop: '0.5rem', fontSize: '0.8rem', fontWeight: 600 }}>
+                          <span style={{ color: 'var(--color-primary)' }}>{prod.price}</span>
+                          <span style={{ color: '#eab308' }}>★ {prod.rating}</span>
+                        </div>
+                        <a 
+                          href={`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(prod.searchQuery)}`} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="btn btn-outline btn-sm text-center flex-center"
+                          style={{ width: '100%', fontSize: '0.75rem', padding: '0.4rem', textDecoration: 'none', gap: '0.25rem' }}
+                        >
+                          🖼️ Google Images Lookup
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="results-actions-row flex-between">
+                  <button className="btn btn-outline flex-center" onClick={handleAskAi}>
+                    <Sparkles size={16} /> {t('disease.askAi')}
+                  </button>
+                  <button className="btn btn-secondary flex-center" onClick={handleAskCommunity}>
+                    <Users size={16} /> {t('disease.askCommunity')}
+                  </button>
+                </div>
+              </motion.div>
+            ) : (
+              <div className="results-empty-card glass-card flex-column flex-center text-center">
+                <div className="results-empty-icon">✓</div>
+                <h3>No Crop Diagnostic Reports</h3>
+                <p className="text-muted">Upload a leaf photo or pick a sample card on the left to start AI crop health analysis.</p>
               </div>
-            </motion.div>
+            )
           ) : (
-            <div className="results-empty-card glass-card flex-column flex-center text-center">
-              <div className="results-empty-icon">✓</div>
-              <h3>No Crop Diagnostic Reports</h3>
-              <p className="text-muted">Upload a leaf photo or pick a sample card on the left to start AI crop health analysis.</p>
+            <div className="history-tab-pane glass-card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800, margin: '0 0 0.5rem 0' }}>All Scanned Reports</h3>
+              {diseaseReports.length === 0 ? (
+                <div className="text-center" style={{ padding: '3rem 1rem' }}>
+                  <p className="text-muted" style={{ margin: 0 }}>No previous scans recorded. Link a farm plot and scan crop leaves to save report logs.</p>
+                </div>
+              ) : (
+                <div className="history-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxHeight: '500px', overflowY: 'auto', paddingRight: '0.25rem' }}>
+                  {[...diseaseReports].reverse().map((item) => {
+                    const farmName = farms.find(f => f.id === item.farmId)?.name || 'Quick Scan';
+                    return (
+                      <div 
+                        key={item.id} 
+                        className="history-item flex-between" 
+                        onClick={() => handleSelectHistoryItem(item)}
+                        style={{ 
+                          padding: '0.75rem', 
+                          backgroundColor: 'var(--bg-secondary)', 
+                          border: '1px solid var(--border-color)', 
+                          borderRadius: 'var(--radius-md)', 
+                          cursor: 'pointer',
+                          transition: 'all var(--transition-fast)'
+                        }}
+                      >
+                        <div className="flex" style={{ gap: '1rem', alignItems: 'center' }}>
+                          <img 
+                            src={item.imageUrl} 
+                            alt={item.diseaseName} 
+                            style={{ width: '50px', height: '50px', objectFit: 'cover', borderRadius: 'var(--radius-sm)' }} 
+                          />
+                          <div>
+                            <h5 style={{ fontSize: '0.9rem', fontWeight: 700, margin: 0 }}>{item.diseaseName}</h5>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              {item.cropType} • {farmName} • {new Date(item.date).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex-column" style={{ alignItems: 'flex-end', gap: '0.25rem' }}>
+                          <span className="badge badge-danger" style={{ fontSize: '0.7rem' }}>
+                            {item.confidence}% match
+                          </span>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--color-primary)', fontWeight: 600 }}>Click to View Details →</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -594,8 +811,32 @@ export const DiseaseDetection: React.FC = () => {
           100% { transform: rotate(360deg); }
         }
 
+        .history-item {
+          transition: all var(--transition-fast);
+        }
+        .history-item:hover {
+          border-color: var(--color-primary) !important;
+          background-color: var(--color-light-green) !important;
+          transform: translateX(3px);
+        }
+        html[data-theme='dark'] .history-item:hover {
+          background-color: rgba(22, 163, 74, 0.1) !important;
+        }
+
+        .fertilizer-product-card:hover {
+          border-color: var(--color-primary) !important;
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        }
+
         @media (max-width: 1024px) {
           .disease-scan-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 768px) {
+          .paragraph-block-grid {
             grid-template-columns: 1fr;
           }
         }

@@ -15,18 +15,34 @@ import {
   ChevronLeft,
   ChevronRight,
   Info,
-  Shield
+  Shield,
+  Award
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 interface SidebarProps {
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
+  mobileOpen: boolean;
+  setMobileOpen: (open: boolean) => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ collapsed, setCollapsed }) => {
-  const { t } = useLanguage();
+export const Sidebar: React.FC<SidebarProps> = ({ collapsed, setCollapsed, mobileOpen, setMobileOpen }) => {
+  const { t, language } = useLanguage();
   const { user } = useAuth();
+
+  const schemesLabels: Record<string, string> = {
+    en: 'Gov Schemes',
+    te: 'ప్రభుత్వ పథకాలు',
+    hi: 'सरकारी योजनाएं',
+    ta: 'அரசு திட்டங்கள்',
+    kn: 'ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು',
+    mr: 'सरकारी योजना',
+    gu: 'સરકારી યોજનાઓ',
+    bn: 'সরকারি প্রকল্প',
+    pa: 'ਸਰਕਾਰੀ ਸਕੀਮਾਂ',
+    ml: 'സർക്കാർ പദ്ധതികൾ'
+  };
 
   const menuItems = user?.role === 'admin'
     ? [
@@ -39,6 +55,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed, setCollapsed }) => 
         { path: '/weather', label: t('nav.weather'), icon: CloudSun },
         { path: '/disease', label: t('nav.disease'), icon: Camera },
         { path: '/copilot', label: t('nav.aiCopilot'), icon: Bot },
+        { path: '/schemes', label: schemesLabels[language] || 'Gov Schemes', icon: Award },
         { path: '/cashbook', label: t('nav.cashbook'), icon: Wallet },
         { path: '/analytics', label: t('nav.analytics'), icon: BarChart3 },
         { path: '/community', label: t('nav.community'), icon: Users },
@@ -47,7 +64,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed, setCollapsed }) => 
       ];
 
   return (
-    <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
+    <aside className={`sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'mobile-open' : ''}`}>
       <div className="sidebar-header">
         {!collapsed && (
           <div className="sidebar-logo">
@@ -223,6 +240,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed, setCollapsed }) => 
           opacity: 0;
           width: 0;
           display: none;
+        }
+
+        @media (max-width: 768px) {
+          .sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            height: 100vh;
+            transform: translateX(-100%);
+            z-index: 100;
+            width: var(--sidebar-width) !important;
+            transition: transform var(--transition-normal);
+            box-shadow: var(--shadow-xl);
+          }
+          .sidebar.mobile-open {
+            transform: translateX(0);
+          }
+          .sidebar-toggle-btn {
+            display: none !important;
+          }
         }
       `}</style>
     </aside>

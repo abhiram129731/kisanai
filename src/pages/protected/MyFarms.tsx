@@ -32,6 +32,10 @@ export const MyFarms: React.FC = () => {
   const [drawingPoints, setDrawingPoints] = useState<{ lat: number; lng: number }[]>([]);
   const [newFarmDrawingPoints, setNewFarmDrawingPoints] = useState<{ lat: number; lng: number }[]>([]);
 
+  // Main map floating search state
+  const [mainSearchQuery, setMainSearchQuery] = useState('');
+  const [mainSearching, setMainSearching] = useState(false);
+
   // Leaflet references
   const mapRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -44,6 +48,51 @@ export const MyFarms: React.FC = () => {
   const addFarmPolygonInstanceRef = useRef<any>(null);
   const gpsMarkerRef = useRef<any>(null);
   const addGpsMarkerRef = useRef<any>(null);
+
+  // Floating map layer selection state & refs
+  const [mainMapLayer, setMainMapLayer] = useState<'satellite' | 'normal' | 'terrain'>('satellite');
+  const [addMapLayer, setAddMapLayer] = useState<'satellite' | 'normal' | 'terrain'>('satellite');
+  const mainLayersRef = useRef<{ satellite: any; normal: any; terrain: any } | null>(null);
+  const addLayersRef = useRef<{ satellite: any; normal: any; terrain: any } | null>(null);
+
+  const layerBtnStyle = (isActive: boolean) => ({
+    padding: '0.3rem 0.6rem',
+    fontSize: '0.75rem',
+    fontWeight: 700,
+    backgroundColor: isActive ? 'var(--color-primary)' : 'rgba(15, 23, 42, 0.6)',
+    color: '#ffffff',
+    border: 'none',
+    borderRadius: 'var(--radius-sm)',
+    cursor: 'pointer',
+    textAlign: 'left' as const,
+    transition: 'all 0.2s',
+    display: 'block',
+    width: '100%'
+  });
+
+  const handleToggleLayer = (type: 'satellite' | 'normal' | 'terrain', isAddFarmMap: boolean) => {
+    if (isAddFarmMap) {
+      setAddMapLayer(type);
+      const map = addFarmMapInstanceRef.current;
+      const layers = addLayersRef.current;
+      if (map && layers) {
+        if (map.hasLayer(layers.satellite)) map.removeLayer(layers.satellite);
+        if (map.hasLayer(layers.normal)) map.removeLayer(layers.normal);
+        if (map.hasLayer(layers.terrain)) map.removeLayer(layers.terrain);
+        layers[type].addTo(map);
+      }
+    } else {
+      setMainMapLayer(type);
+      const map = mapInstanceRef.current;
+      const layers = mainLayersRef.current;
+      if (map && layers) {
+        if (map.hasLayer(layers.satellite)) map.removeLayer(layers.satellite);
+        if (map.hasLayer(layers.normal)) map.removeLayer(layers.normal);
+        if (map.hasLayer(layers.terrain)) map.removeLayer(layers.terrain);
+        layers[type].addTo(map);
+      }
+    }
+  };
 
   // GPS Telemetry and Weather States
   const [gpsLoading, setGpsLoading] = useState(false);
@@ -242,42 +291,31 @@ export const MyFarms: React.FC = () => {
         zoomControl: true,
       });
 
-      // Google Hybrid Layer
-      const googleHybrid = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
-        maxZoom: 20,
-        subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
-        attribution: 'Map data &copy; Google'
-      });
-
-      // Esri Satellite Layer
-      const esriSatellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      // Satellite Layer (Esri)
+      const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         maxZoom: 19,
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+        attribution: 'Tiles &copy; Esri'
       });
 
-      // OpenStreetMap Layer
-      const osmStandard = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      // Standard Map Layer (OSM)
+      const normal = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap contributors'
       });
 
-      // Google Roadmap Layer
-      const googleRoadmap = L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+      // Terrain Map Layer (Google Terrain)
+      const terrain = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', {
         maxZoom: 20,
         subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
         attribution: 'Map data &copy; Google'
       });
 
-      // Default to Esri Satellite
-      esriSatellite.addTo(map);
+      mainLayersRef.current = { satellite, normal, terrain };
 
-      // Layer selector
-      L.control.layers({
-        "Satellite (Google)": googleHybrid,
-        "Satellite (Esri)": esriSatellite,
-        "Standard Map (OSM)": osmStandard,
-        "Terrain (Google)": googleRoadmap
-      }, null, { position: 'topright' }).addTo(map);
+      // Add default layer
+      if (mainMapLayer === 'satellite') satellite.addTo(map);
+      else if (mainMapLayer === 'normal') normal.addTo(map);
+      else terrain.addTo(map);
 
       mapInstanceRef.current = map;
       setTimeout(() => {
@@ -414,7 +452,7 @@ export const MyFarms: React.FC = () => {
 
   // Helper for geodesic calculations using Turf.js
   const calculateGeodesicArea = (points: { lat: number; lng: number }[]) => {
-    if (points.length < 3) return { acres: 0, hectares: 0, sqm: 0, perimeter: 0 };
+    if (points.length < 3) return { acres: 0, hectares: 0, sqm: 0, sqft: 0, perimeter: 0 };
     try {
       const coords = points.map(p => [p.lng, p.lat]);
       coords.push([points[0].lng, points[0].lat]); // Close the polygon ring
@@ -426,6 +464,7 @@ export const MyFarms: React.FC = () => {
       // 1 Acre = sqm * 0.000247105
       const hectares = Number((sqm / 10000).toFixed(4));
       const acres = Number((sqm * 0.000247105).toFixed(4));
+      const sqft = Math.round(sqm * 10.7639);
       
       // Calculate perimeter using turf.length
       const line = turf.lineString(coords);
@@ -433,13 +472,14 @@ export const MyFarms: React.FC = () => {
       
       return {
         sqm: Math.round(sqm),
+        sqft,
         hectares,
         acres,
         perimeter: perimeterMeters
       };
     } catch (e) {
       console.error("Turf geodesic area calculation error:", e);
-      return { acres: 0, hectares: 0, sqm: 0, perimeter: 0 };
+      return { acres: 0, hectares: 0, sqm: 0, sqft: 0, perimeter: 0 };
     }
   };
 
@@ -588,7 +628,8 @@ export const MyFarms: React.FC = () => {
         coordinates: drawingPoints,
         area: boundaryCalculations.acres,
         areaHectares: boundaryCalculations.hectares,
-        areaSqm: boundaryCalculations.sqm
+        areaSqm: boundaryCalculations.sqm,
+        areaSqft: boundaryCalculations.sqft
       });
 
       addTimelineEvent(activeFarm.id, {
@@ -631,42 +672,31 @@ export const MyFarms: React.FC = () => {
         zoomControl: true,
       });
 
-      // Google Hybrid Layer
-      const googleHybrid = L.tileLayer('https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
-        maxZoom: 20,
-        subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
-        attribution: 'Map data &copy; Google'
-      });
-
-      // Esri Satellite Layer
-      const esriSatellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      // Satellite Layer (Esri)
+      const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         maxZoom: 19,
-        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+        attribution: 'Tiles &copy; Esri'
       });
 
-      // OpenStreetMap Layer
-      const osmStandard = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      // Standard Map Layer (OSM)
+      const normal = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap contributors'
       });
 
-      // Google Roadmap Layer
-      const googleRoadmap = L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+      // Terrain Map Layer (Google Terrain)
+      const terrain = L.tileLayer('https://{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}', {
         maxZoom: 20,
         subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
         attribution: 'Map data &copy; Google'
       });
 
-      // Default to Esri Satellite
-      esriSatellite.addTo(map);
+      addLayersRef.current = { satellite, normal, terrain };
 
-      // Layer selector
-      L.control.layers({
-        "Satellite (Google)": googleHybrid,
-        "Satellite (Esri)": esriSatellite,
-        "Standard Map (OSM)": osmStandard,
-        "Terrain (Google)": googleRoadmap
-      }, null, { position: 'topright' }).addTo(map);
+      // Add default layer
+      if (addMapLayer === 'satellite') satellite.addTo(map);
+      else if (addMapLayer === 'normal') normal.addTo(map);
+      else terrain.addTo(map);
 
       // Geolocate user to center map directly
       fetchUserLocation().then(({ lat, lng }) => {
@@ -814,7 +844,7 @@ export const MyFarms: React.FC = () => {
         const lng = parseFloat(data[0].lon);
         if (addFarmMapInstanceRef.current) {
           const map = addFarmMapInstanceRef.current;
-          map.setView([lat, lng], 15);
+          map.setView([lat, lng], 16);
         }
       } else {
         alert("Location not found on map. Please try manually clicking the map or try another name.");
@@ -824,6 +854,37 @@ export const MyFarms: React.FC = () => {
       alert("Location search is temporarily unavailable. Please place a pin manually on the map.");
     } finally {
       setSearching(false);
+    }
+  };
+
+  const handleMainSearchLocation = async () => {
+    if (!mainSearchQuery.trim()) {
+      alert("Please enter a location query first.");
+      return;
+    }
+    setMainSearching(true);
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(mainSearchQuery)}&limit=1`, {
+        headers: {
+          'User-Agent': 'KisanAI-Agritech-Platform'
+        }
+      });
+      const data = await response.json();
+      if (data && data.length > 0) {
+        const lat = parseFloat(data[0].lat);
+        const lng = parseFloat(data[0].lon);
+        if (mapInstanceRef.current) {
+          const map = mapInstanceRef.current;
+          map.setView([lat, lng], 16);
+        }
+      } else {
+        alert("Location not found on map. Please try manually clicking the map or try another name.");
+      }
+    } catch (err) {
+      console.error("Geocoding failed:", err);
+      alert("Location search is temporarily unavailable.");
+    } finally {
+      setMainSearching(false);
     }
   };
 
@@ -842,9 +903,10 @@ export const MyFarms: React.FC = () => {
       name,
       location: finalLocation,
       crop,
-      area: newFarmCalculations.acres,
+      area: area,
       areaHectares: newFarmCalculations.hectares,
       areaSqm: newFarmCalculations.sqm,
+      areaSqft: newFarmCalculations.sqft,
       soilType,
       irrigationMethod: irrigation,
       notes,
@@ -940,6 +1002,12 @@ export const MyFarms: React.FC = () => {
                     placeholder="e.g. Karimnagar, Telangana" 
                     value={location} 
                     onChange={(e) => setLocation(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSearchLocation();
+                      }
+                    }}
                     style={{ flex: 1, minWidth: '180px' }}
                   />
                   <button 
@@ -1008,6 +1076,43 @@ export const MyFarms: React.FC = () => {
                     id="add-farm-leaflet-map" 
                     style={{ width: '100%', height: '250px', borderRadius: 'var(--radius-md)', border: '1.5px solid var(--border-color)', overflow: 'hidden', marginBottom: '0.5rem' }}
                   />
+                  {/* Custom Floating map controls */}
+                  <div className="map-layer-floating-controls" style={{
+                    position: 'absolute',
+                    top: '10px',
+                    right: '10px',
+                    zIndex: 20,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.4rem',
+                    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                    padding: '0.4rem',
+                    borderRadius: 'var(--radius-md)',
+                    backdropFilter: 'blur(4px)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)'
+                  }}>
+                    <button 
+                      type="button"
+                      style={layerBtnStyle(addMapLayer === 'satellite')}
+                      onClick={() => handleToggleLayer('satellite', true)}
+                    >
+                      🛰️ Satellite Map
+                    </button>
+                    <button 
+                      type="button"
+                      style={layerBtnStyle(addMapLayer === 'normal')}
+                      onClick={() => handleToggleLayer('normal', true)}
+                    >
+                      🗺️ Normal Map
+                    </button>
+                    <button 
+                      type="button"
+                      style={layerBtnStyle(addMapLayer === 'terrain')}
+                      onClick={() => handleToggleLayer('terrain', true)}
+                    >
+                      ⛰️ Terrain Map
+                    </button>
+                  </div>
                   {gpsLoading && (
                     <div className="gps-loading-overlay flex-center flex-column" style={{
                       position: 'absolute',
@@ -1059,7 +1164,7 @@ export const MyFarms: React.FC = () => {
                   </span>
                   {newFarmDrawingPoints.length > 2 && (
                     <span style={{ color: 'var(--color-primary)', fontWeight: 'bold' }}>
-                      🌾 Area: {newFarmCalculations.acres} ac | {newFarmCalculations.hectares} ha | {newFarmCalculations.sqm} m² | 📏 Perimeter: {newFarmCalculations.perimeter}m
+                      🌾 Area: {newFarmCalculations.acres} ac | {newFarmCalculations.hectares} ha | {newFarmCalculations.sqm} m² | {newFarmCalculations.sqft.toLocaleString()} sq ft | 📏 Perimeter: {newFarmCalculations.perimeter}m
                     </span>
                   )}
                 </div>
@@ -1088,9 +1193,10 @@ export const MyFarms: React.FC = () => {
                     type="number" 
                     className="form-input" 
                     required 
-                    min={1} 
+                    min="0.01" 
+                    step="any" 
                     value={area} 
-                    onChange={(e) => setArea(Number(e.target.value))}
+                    onChange={(e) => setArea(e.target.value === '' ? 0 : parseFloat(e.target.value))}
                   />
                 </div>
               </div>
@@ -1173,6 +1279,17 @@ export const MyFarms: React.FC = () => {
                       <span className="spec-value">{activeFarm.areaSqm} m²</span>
                     </div>
                   )}
+                  {(activeFarm.areaSqft !== undefined && activeFarm.areaSqft !== null) ? (
+                    <div className="spec-row">
+                      <span className="spec-label">Square Feet</span>
+                      <span className="spec-value">{activeFarm.areaSqft.toLocaleString()} sq ft</span>
+                    </div>
+                  ) : activeFarm.areaSqm ? (
+                    <div className="spec-row">
+                      <span className="spec-label">Square Feet</span>
+                      <span className="spec-value">{Math.round(activeFarm.areaSqm * 10.7639).toLocaleString()} sq ft</span>
+                    </div>
+                  ) : null}
                   <div className="spec-row">
                     <span className="spec-label">Soil Chemistry</span>
                     <span className="spec-value">{activeFarm.soilType}</span>
@@ -1270,6 +1387,90 @@ export const MyFarms: React.FC = () => {
                     id="farm-leaflet-map" 
                     style={{ width: '100%', height: '100%', zIndex: 1 }}
                   />
+                  {/* Floating geocoding search container */}
+                  <div className="map-search-floating-container" style={{
+                    position: 'absolute',
+                    top: '10px',
+                    left: '10px',
+                    zIndex: 20,
+                    display: 'flex',
+                    gap: '0.25rem',
+                    backgroundColor: 'var(--bg-primary)',
+                    padding: '0.3rem',
+                    borderRadius: 'var(--radius-md)',
+                    boxShadow: 'var(--shadow-md)',
+                    border: '1px solid var(--border-color)',
+                    width: '100%',
+                    maxWidth: '240px'
+                  }}>
+                    <input 
+                      type="text" 
+                      placeholder="Search village/town..." 
+                      value={mainSearchQuery}
+                      onChange={(e) => setMainSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleMainSearchLocation();
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        border: 'none',
+                        background: 'transparent',
+                        padding: '0.25rem 0.5rem',
+                        fontSize: '0.85rem',
+                        color: 'var(--text-primary)',
+                        outline: 'none'
+                      }}
+                    />
+                    <button 
+                      type="button" 
+                      className="btn btn-primary btn-sm"
+                      onClick={handleMainSearchLocation}
+                      disabled={mainSearching}
+                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                    >
+                      {mainSearching ? '...' : 'Search'}
+                    </button>
+                  </div>
+                  {/* Custom Floating map controls */}
+                  <div className="map-layer-floating-controls" style={{
+                    position: 'absolute',
+                    top: '10px',
+                    right: '10px',
+                    zIndex: 20,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.4rem',
+                    backgroundColor: 'rgba(15, 23, 42, 0.85)',
+                    padding: '0.4rem',
+                    borderRadius: 'var(--radius-md)',
+                    backdropFilter: 'blur(4px)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)'
+                  }}>
+                    <button 
+                      type="button"
+                      style={layerBtnStyle(mainMapLayer === 'satellite')}
+                      onClick={() => handleToggleLayer('satellite', false)}
+                    >
+                      🛰️ Satellite Map
+                    </button>
+                    <button 
+                      type="button"
+                      style={layerBtnStyle(mainMapLayer === 'normal')}
+                      onClick={() => handleToggleLayer('normal', false)}
+                    >
+                      🗺️ Normal Map
+                    </button>
+                    <button 
+                      type="button"
+                      style={layerBtnStyle(mainMapLayer === 'terrain')}
+                      onClick={() => handleToggleLayer('terrain', false)}
+                    >
+                      ⛰️ Terrain Map
+                    </button>
+                  </div>
 
                   {drawMode && (
                     <div className="map-draw-banner" style={{ zIndex: 10 }}>
@@ -1328,6 +1529,7 @@ export const MyFarms: React.FC = () => {
                       <div>🌾 Acres: <strong>{boundaryCalculations.acres} ac</strong></div>
                       <div>🌍 Hectares: <strong>{boundaryCalculations.hectares} ha</strong></div>
                       <div>📐 Area: <strong>{boundaryCalculations.sqm} m²</strong></div>
+                      <div>📐 Sq Feet: <strong>{boundaryCalculations.sqft.toLocaleString()} ft²</strong></div>
                     </div>
                   )}
                 </div>

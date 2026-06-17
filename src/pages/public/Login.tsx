@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LogIn, AlertCircle, Mail, MapPin, Layers, ArrowRight, ArrowLeft } from 'lucide-react';
+import { api } from '../../services/api';
 
 export const Login: React.FC = () => {
   const { 
@@ -20,12 +21,18 @@ export const Login: React.FC = () => {
 
   // Mode & Loading states
   const [isRegisterMode, setIsRegisterMode] = useState(false);
+  const [isResetMode, setIsResetMode] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
 
   // Form Fields
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+
+  // Reset Fields
+  const [resetPhone, setResetPhone] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
   
   // New Farmer 5-Step Registration states
   const [registerStep, setRegisterStep] = useState(1);
@@ -100,6 +107,38 @@ export const Login: React.FC = () => {
     }
   };
 
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username || !resetNewPassword) {
+      setError('Please fill in username and new password.');
+      return;
+    }
+    if (resetNewPassword.length < 8) {
+      setError('New password must be at least 8 characters long.');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    setSuccessMessage('');
+    try {
+      await api.auth.resetPassword({
+        username,
+        phoneNumber: resetPhone,
+        newPassword: resetNewPassword
+      });
+      setSuccessMessage('Password reset successfully! You can now log in.');
+      setIsResetMode(false);
+      setUsername('');
+      setResetPhone('');
+      setResetNewPassword('');
+    } catch (err: any) {
+      setError(err.message || 'Failed to reset password. Verify your username and phone number.');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="login-wrapper flex-center">
       <motion.div 
@@ -110,20 +149,22 @@ export const Login: React.FC = () => {
       >
         <div className="login-brand text-center">
           <span className="brand-logo">🌾</span>
-          <h2>{isRegisterMode ? 'New Farmer Registration' : 'Farmer Login'}</h2>
+          <h2>{isResetMode ? 'Reset Password' : isRegisterMode ? 'New Farmer Registration' : 'Farmer Login'}</h2>
           <p className="text-muted">{t('brand.tagline')}</p>
         </div>
 
-        {/* Tab Toggle (Hidden during Step 2 verification) */}
-        {registerStep < 2 && (
+        {/* Tab Toggle (Hidden during Step 2 verification or Reset mode) */}
+        {registerStep < 2 && !isResetMode && (
           <div className="login-mode-tabs flex-between">
             <button 
               type="button" 
               className={`mode-tab ${!isRegisterMode ? 'active' : ''}`}
               onClick={() => {
                 setIsRegisterMode(false);
+                setIsResetMode(false);
                 setRegisterStep(1);
                 setError('');
+                setSuccessMessage('');
               }}
             >
               Login
@@ -133,12 +174,29 @@ export const Login: React.FC = () => {
               className={`mode-tab ${isRegisterMode ? 'active' : ''}`}
               onClick={() => {
                 setIsRegisterMode(true);
+                setIsResetMode(false);
                 setRegisterStep(1);
                 setError('');
+                setSuccessMessage('');
               }}
             >
               Register
             </button>
+          </div>
+        )}
+
+        {successMessage && (
+          <div className="success-box flex-center" style={{
+            backgroundColor: 'rgba(34, 197, 94, 0.08)',
+            border: '1px solid rgba(34, 197, 94, 0.2)',
+            color: '#22c55e',
+            padding: '0.75rem',
+            borderRadius: 'var(--radius-md)',
+            fontSize: '0.85rem',
+            gap: '0.5rem',
+            fontWeight: 600
+          }}>
+            <span>{successMessage}</span>
           </div>
         )}
 
@@ -150,7 +208,7 @@ export const Login: React.FC = () => {
         )}
 
         {/* MODE 1: Login Form */}
-        {!isRegisterMode && (
+        {!isRegisterMode && !isResetMode && (
           <form onSubmit={handleEmailLogin} className="login-form flex-column" style={{ gap: '1rem' }}>
             <div className="form-group">
               <label className="form-label">Username</label>
@@ -176,6 +234,22 @@ export const Login: React.FC = () => {
               />
             </div>
 
+            <div className="flex-end" style={{ marginTop: '-0.5rem', marginBottom: '0.5rem' }}>
+              <button 
+                type="button" 
+                className="btn-text-only green-text"
+                style={{ fontSize: '0.85rem', fontWeight: 600 }}
+                onClick={() => {
+                  setIsResetMode(true);
+                  setIsRegisterMode(false);
+                  setError('');
+                  setSuccessMessage('');
+                }}
+              >
+                Forgot Password?
+              </button>
+            </div>
+
             <button 
               type="submit" 
               className="btn btn-primary" 
@@ -183,6 +257,69 @@ export const Login: React.FC = () => {
               disabled={loading}
             >
               {loading ? 'Processing...' : t('common.login')}
+            </button>
+          </form>
+        )}
+
+        {/* MODE 3: Reset Password Form */}
+        {isResetMode && (
+          <form onSubmit={handleResetPassword} className="login-form flex-column" style={{ gap: '1rem' }}>
+            <div className="form-group">
+              <label className="form-label">Username</label>
+              <input 
+                type="text" 
+                className="form-input" 
+                placeholder="e.g. farmer_abhiram"
+                required 
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Phone Number (registered)</label>
+              <input 
+                type="tel" 
+                className="form-input" 
+                placeholder="+91 98765 43210" 
+                value={resetPhone}
+                onChange={(e) => setResetPhone(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">New Password</label>
+              <input 
+                type="password" 
+                className="form-input" 
+                placeholder="••••••••"
+                required 
+                value={resetNewPassword}
+                onChange={(e) => setResetNewPassword(e.target.value)}
+              />
+            </div>
+
+            <button 
+              type="submit" 
+              className="btn btn-primary" 
+              style={{ width: '100%' }}
+              disabled={loading}
+            >
+              {loading ? 'Resetting...' : 'Reset Password'}
+            </button>
+
+            <button 
+              type="button" 
+              className="btn btn-secondary flex-center" 
+              style={{ width: '100%', gap: '0.5rem' }}
+              onClick={() => {
+                setIsResetMode(false);
+                setError('');
+                setSuccessMessage('');
+              }}
+            >
+              <ArrowLeft size={16} />
+              <span>Back to Login</span>
             </button>
           </form>
         )}

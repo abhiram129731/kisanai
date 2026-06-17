@@ -4,13 +4,26 @@ import { useLanguage } from '../../context/LanguageContext';
 import { api } from '../../services/api';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
 import { motion } from 'framer-motion';
-import { Sprout, CloudSun, TrendingUp, AlertTriangle, ArrowUpRight, DollarSign, Plus, Eye } from 'lucide-react';
+import { Sprout, CloudSun, TrendingUp, AlertTriangle, ArrowUpRight, DollarSign, Plus, Eye, Award } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const Dashboard: React.FC = () => {
   const { farms, cashEntries, alerts } = useFarms();
-  const { t } = useLanguage();
+  const { t, language } = useLanguage();
   const navigate = useNavigate();
+
+  const [schemesCount, setSchemesCount] = useState(3);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('kisan_managed_schemes');
+      if (saved) {
+        setSchemesCount(JSON.parse(saved).length);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
 
   // Redirect if no farms are active
   const hasFarms = farms.length > 0;
@@ -278,6 +291,25 @@ export const Dashboard: React.FC = () => {
             {soilQualityScore === 'N/A' ? 'No farm plots registered' : 'Optimal nutrient & pH balance'}
           </div>
         </motion.div>
+
+        {/* Metric 4: Government Schemes */}
+        <motion.div 
+          className="metric-card glass-card"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, delay: 0.3 }}
+          onClick={() => navigate('/schemes')}
+          style={{ cursor: 'pointer' }}
+        >
+          <div className="metric-header flex-between">
+            <span className="metric-label">{language === 'te' ? 'ప్రభుత్వ పథకాలు' : language === 'hi' ? 'सरकारी योजनाएं' : 'Gov Schemes'}</span>
+            <div className="metric-icon flex-center" style={{ backgroundColor: 'rgba(168, 85, 247, 0.1)', color: '#a855f7' }}><Award size={18} /></div>
+          </div>
+          <div className="metric-val text-gradient" style={{ background: 'linear-gradient(135deg, #a855f7 0%, #6366f1 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>{schemesCount} Active</div>
+          <div className="metric-sub text-muted" style={{ color: 'var(--color-primary)', fontWeight: 600 }}>
+            View Benefits & Portals →
+          </div>
+        </motion.div>
       </section>
 
       {/* 2. Charts and AI Ticker Section */}
@@ -455,7 +487,7 @@ export const Dashboard: React.FC = () => {
         /* Metrics */
         .metrics-row {
           display: grid;
-          grid-template-columns: repeat(3, 1fr);
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
           gap: 1.5rem;
         }
 

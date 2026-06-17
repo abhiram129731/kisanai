@@ -59,6 +59,10 @@ export const api = {
     }),
     getFarmers: () => request('/auth/farmers', {
       method: 'GET'
+    }),
+    resetPassword: (body: any) => request('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify(body)
     })
   },
 
@@ -76,6 +80,26 @@ export const api = {
       body: JSON.stringify(body)
     }),
     delete: (id: string) => request(`/farms/${id}/delete`, {
+      method: 'POST'
+    })
+  },
+
+  // Marketplace P2P CRUD
+  marketplace: {
+    getAll: (q?: string, category?: string) => {
+      const params = new URLSearchParams();
+      if (q) params.append('q', q);
+      if (category) params.append('category', category);
+      const queryStr = params.toString();
+      return request(`/marketplace${queryStr ? `?${queryStr}` : ''}`, {
+        method: 'GET'
+      });
+    },
+    create: (body: any) => request('/marketplace', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    }),
+    delete: (id: string) => request(`/marketplace/${id}/delete`, {
       method: 'POST'
     })
   },
@@ -135,6 +159,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ role })
     }),
+    banUser: (uid: string, isBanned: boolean) => request(`/admin/users/${uid}/ban`, {
+      method: 'PUT',
+      body: JSON.stringify({ isBanned })
+    }),
     deleteUser: (uid: string) => request(`/admin/users/${uid}/delete`, {
       method: 'POST'
     }),
@@ -148,8 +176,8 @@ export const api = {
 
   // Live Weather & AI recommendations
   weather: {
-    get: (lat: number | string, lng: number | string, crop?: string) => 
-      request(`/weather?lat=${lat}&lng=${lng}${crop ? `&crop=${encodeURIComponent(crop)}` : ''}`, {
+    get: (lat: number | string, lng: number | string, crop?: string, language?: string) => 
+      request(`/weather?lat=${lat}&lng=${lng}${crop ? `&crop=${encodeURIComponent(crop)}` : ''}${language ? `&language=${encodeURIComponent(language)}` : ''}`, {
         method: 'GET'
       })
   },

@@ -6,14 +6,28 @@ import { motion, AnimatePresence } from 'framer-motion';
 
 export const Layout: React.FC = () => {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
+
+  React.useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
 
   return (
     <div className="app-layout">
-      <Sidebar collapsed={collapsed} setCollapsed={setCollapsed} />
+      <Sidebar 
+        collapsed={collapsed} 
+        setCollapsed={setCollapsed} 
+        mobileOpen={mobileOpen}
+        setMobileOpen={setMobileOpen}
+      />
+      
+      {mobileOpen && (
+        <div className="sidebar-backdrop" onClick={() => setMobileOpen(false)} />
+      )}
       
       <div className="layout-content-wrapper">
-        <Navbar />
+        <Navbar onToggleMobileSidebar={() => setMobileOpen(!mobileOpen)} />
         
         <main className="layout-main-content">
           <AnimatePresence mode="wait">
@@ -40,6 +54,19 @@ export const Layout: React.FC = () => {
           background-color: var(--bg-secondary);
         }
 
+        .sidebar-backdrop {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(15, 23, 42, 0.4);
+          backdrop-filter: blur(4px);
+          -webkit-backdrop-filter: blur(4px);
+          z-index: 98;
+          display: none;
+        }
+
         .layout-content-wrapper {
           display: flex;
           flex-direction: column;
@@ -57,6 +84,9 @@ export const Layout: React.FC = () => {
         }
 
         @media (max-width: 768px) {
+          .sidebar-backdrop {
+            display: block;
+          }
           .layout-main-content {
             padding: 1rem;
           }
