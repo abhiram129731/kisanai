@@ -1515,6 +1515,24 @@ app.post('/api/disease', authenticateToken, async (req, res) => {
   }
 });
 
+// Local Chat Fallback Handler
+const getLocalChatFallback = (language) => {
+  const activeLang = language || 'en';
+  const fallbacks = {
+    en: "I am currently running in offline fallback mode. For optimal crop growth, ensure regular soil testing every two seasons, maintain appropriate drainage, apply organic manures, and follow crop-specific fertilizer schedules. What specific questions do you have today?",
+    te: "నేను ప్రస్తుతం ఆఫ్‌లైన్ ఫాల్‌బ్యాక్ మోడ్‌లో నడుస్తున్నాను. పంట సరైన వృద్ధి కోసం, ప్రతి రెండు సీజన్లకు ఒకసారి నేల పరీక్షలు చేయించుకోండి, సరైన నీటి పారుదల సౌకర్యం కల్పించండి మరియు సేంద్రీయ ఎరువులను వాడండి. ఈ రోజు మీకు ఏ సహాయం కావాలి?",
+    hi: "मैं वर्तमान में ऑफ़लाइन फ़ॉलबैक मोड में काम कर रहा हूँ। फसलों के इष्टतम विकास के लिए, हर दो सीज़न में मिट्टी का परीक्षण कराएं, उचित जल निकासी व्यवस्था रखें और जैविक खाद का उपयोग करें। आज आप क्या जानना चाहते हैं?",
+    gu: "હું અત્યારે ઑફલાઇન ફોલબેક મોડમાં કામ કરી રહ્યો છું. પાકના શ્રેષ્ઠ વિકાસ માટે, દર બે સીઝનમાં માટી પરીક્ષણ કરાવો, યોગ્ય ડ્રેનેજ રાખો અને ઓર્ગેનિક ખાતરોનો ઉપયોગ કરો. આજે તમે શું જાણવા માંગો છો?",
+    mr: "मी सध्या ऑफलाइन फॉलबॅक मोडमध्ये काम करत आहे. पिकांच्या चांगल्या वाढीसाठी, दर दोन हंगामात माती परीक्षण करून घ्या, पाण्याचा निचरा योग्य ठेवा आणि सेंद्रिय खतांचा वापर करा. आज आपण काय विचारू इच्छिता?",
+    ta: "நான் தற்போது ஆஃப்লাইন பயன்முறையில் இயங்களுகிறேன். பயிர் வளர்ச்சிக்கு, இரண்டு பருவகாலங்களுக்கு ஒருமுறை மண் பரிசோதனை செய்யவும், சரியான வடிகால் வசதியை பராமரிக்கவும், இயற்கை உரங்களைப் பயன்படுத்தவும். இன்று உங்களுக்கு என்ன உதவ வேண்டும்?",
+    kn: "ನಾನು ಪ್ರಸ್ತುत ಆಫ್‌ಲೈನ್ ಫಾಲ್‌ಬ್ಯಾಕ್ ಮೋಡ್‌ನಲ್ಲಿ ಚಾಲನೆಯಲ್ಲಿದ್ದೇನೆ. ಬೆಳೆಯ ಉತ್ತಮ ಬೆಳವಣಿಗೆಗಾಗಿ, ಪ್ರತಿ ಎರಡು ಹಂಗಾಮಿಗೆ ಒಮ್ಮೆ ಮಣ್ಣಿನ ಪರೀಕ್ಷೆ ಮಾಡಿಸಿ, ಸರಿಯಾದ ಒಳಚರಂಡಿ ನಿರ್ವಹಿಸಿ ಮತ್ತು ಸಾವಯವ ಗೊಬ್ಬರಗಳನ್ನು ಬಳಸಿ. ಇವತ್ತು ನಿಮಗೆ ಏನು ಸಹಾಯ ಬೇಕು?",
+    bn: "আমি বর্তমানে অফলাইন ফলব্যাক মোডে চলছি। ফসলের সর্বোত্তম বৃদ্ধির জন্য, প্রতি দুই মরসুমে একবার মাটি পরীক্ষা করুন, সঠিক নিকাশী ব্যবস্থা বজায় রাখুন এবং জৈব সার ব্যবহার করুন। আজকে আপনার কি কোনো প্রশ্ন আছে?",
+    pa: "ਮੈਂ ਇਸ ਵੇਲੇ ਆਫ਼ਲਾਈਨ ਫਾਲਬੈਕ ਮੋਡ ਵਿੱਚ ਚੱਲ ਰਿਹਾ ਹਾਂ। ਫ਼ਸਲਾਂ ਦੇ ਵਧੀਆ ਵਿਕਾਸ ਲਈ, ਹਰ ਦੋ ਸੀਜ਼ਨਾਂ ਵਿੱਚ ਮਿੱਟੀ ਦੀ ਪਰਖ ਕਰਵਾਓ, ਪਾਣੀ ਦੇ ਨਿਕਾਸ ਦਾ ਪ੍ਰਬੰਧ ਰੱਖੋ ਅਤੇ ਜੈਵਿਕ ਖਾਦਾਂ ਦੀ ਵਰਤੋਂ ਕਰੋ। ਅੱਜ ਤੁਸੀਂ ਕੀ ਪੁੱਛਣਾ ਚਾਹੁੰਦੇ ਹੋ?",
+    ml: "ഞാൻ ഇപ്പോൾ ഓഫ്‌ലൈൻ ഫാൾബാക്ക് മോഡിൽ പ്രവർത്തിക്കുകയാണ്. വിളകളുടെ മികച്ച വളർച്ചയ്ക്ക്, ഓരോ രണ്ട് സീസണിലും മണ്ണ് പരിശോധന നടത്തുക, ശരിയായ നീരൊഴുക്ക് ഉറപ്പാക്കുക, ജൈവവളങ്ങൾ ഉപയോഗിക്കുക. ഇന്ന് നിങ്ങൾക്ക് എന്താണ് അറിയേണ്ടത്?"
+  };
+  return fallbacks[activeLang] || fallbacks.en;
+};
+
 // Crop Disease Fallback Knowledge Base
 const getLocalDiseaseReport = (cropType, language) => {
   const activeLang = (language === 'te' || language === 'hi') ? language : 'en';
@@ -2002,8 +2020,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
     res.json({ text: reply });
   } catch (err) {
-    console.error("Gemini backend chat error:", err.message);
-    res.status(500).json({ error: `Gemini API chat error: ${err.message}` });
+    console.warn("[Gemini Chat Fallback Mode] Falling back to offline response:", err.message);
+    const fallbackReply = getLocalChatFallback(activeLang);
+    res.json({ text: fallbackReply, fallback: true });
   }
 });
 
@@ -2126,8 +2145,8 @@ app.post('/api/chat/conversations/:id/messages', authenticateToken, async (req, 
         throw new Error("Empty response returned from Gemini API");
       }
     } catch (err) {
-      console.error("Gemini session send message failure:", err);
-      return res.status(500).json({ error: `Gemini API message error: ${err.message}` });
+      console.warn("[Gemini Conversation Fallback Mode] Falling back to offline response:", err.message);
+      reply = getLocalChatFallback(activeLang);
     }
 
     const botMsg = {
