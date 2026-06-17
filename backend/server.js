@@ -16,7 +16,7 @@ if (dns.setDefaultResultOrder) {
   dns.setDefaultResultOrder('ipv4first');
 }
 
-require('dotenv').config({ path: '../.env' }); // Load variables from root .env
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') }); // Load variables from root .env
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -49,6 +49,7 @@ const UserSchema = new mongoose.Schema({
   phoneNumber: { type: String, default: '' },
   isOnboarded: { type: Boolean, default: false }, // Default to false so new users are forced to onboard
   role: { type: String, enum: ['farmer', 'admin'], default: 'farmer' },
+  isBanned: { type: Boolean, default: false },
   preferences: {
     language: { type: String, default: 'en' },
     weatherAlerts: { type: Boolean, default: true },
@@ -68,6 +69,7 @@ const FarmSchema = new mongoose.Schema({
   area: { type: Number, required: true },
   areaHectares: { type: Number },
   areaSqm: { type: Number },
+  areaSqft: { type: Number },
   perimeter: { type: Number },
   soilType: { type: String, required: true },
   irrigationMethod: { type: String, required: true },
@@ -85,6 +87,22 @@ const FarmSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const Farm = mongoose.model('Farm', FarmSchema);
+
+// Marketplace Listing Schema
+const ListingSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  description: { type: String, required: true },
+  category: { type: String, required: true }, // e.g. Machinery, Seeds, Fertilizers, Tools, Livestock, Land
+  price: { type: Number, required: true },
+  location: { type: String, required: true },
+  contact: { type: String, required: true },
+  sellerName: { type: String, required: true },
+  userId: { type: String, required: true }, // Matches User.uid
+  imageUrl: { type: String, default: '' },
+  date: { type: String, required: true }
+}, { timestamps: true });
+
+const Listing = mongoose.model('Listing', ListingSchema);
 
 // Cashbook Entry Schema
 const CashEntrySchema = new mongoose.Schema({
@@ -189,7 +207,8 @@ const initJsonDb = () => {
       communityPosts: [],
       conversations: [],
       savedRecommendations: [],
-      contactInquiries: []
+      contactInquiries: [],
+      listings: []
     }, null, 2));
   }
 };
@@ -208,16 +227,20 @@ const writeJsonDb = (data) => {
 };
 
 const fetchWithRetry = async (url, options = {}, retries = 3, backoff = 1000) => {
+  let lastResponse;
   for (let i = 0; i < retries; i++) {
     try {
       const response = await fetch(url, options);
+      lastResponse = response;
       if (response.ok) {
         return response;
       }
       if (response.status === 429 || (response.status >= 500 && response.status < 600)) {
         console.warn(`Fetch to ${url} failed with status ${response.status}. Retrying in ${backoff}ms... (Attempt ${i + 1}/${retries})`);
-        await new Promise(resolve => setTimeout(resolve, backoff));
-        backoff *= 2;
+        if (i < retries - 1) {
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          backoff *= 2;
+        }
         continue;
       }
       return response;
@@ -230,6 +253,7 @@ const fetchWithRetry = async (url, options = {}, retries = 3, backoff = 1000) =>
       backoff *= 2;
     }
   }
+  return lastResponse;
 };
 
 const getSafeCandidateText = (json) => {
@@ -363,7 +387,7 @@ const DB = {
   async getAllUsersAdmin() {
     if (this.isMongoConnected()) {
       try {
-        const docs = await User.find({}, 'uid username email displayName photoURL phoneNumber role isOnboarded createdAt');
+        const docs = await User.find({}, 'uid username email displayName photoURL phoneNumber role isOnboarded isBanned createdAt');
         return docs.map(d => d.toObject());
       } catch (err) {
         console.error("MongoDB getAllUsersAdmin error, falling back to JSON:", err.message);
@@ -379,6 +403,7 @@ const DB = {
       phoneNumber: u.phoneNumber,
       role: u.role,
       isOnboarded: u.isOnboarded,
+      isBanned: u.isBanned || false,
       createdAt: u.createdAt
     }));
   },
@@ -763,6 +788,119 @@ const DB = {
     return data.conversations.length < initialLen;
   },
 
+  // Marketplace Listings
+  async getListings(query, category) {
+    if (this.isMongoConnected()) {
+      try {
+        const filter = {};
+        if (category) filter.category = category;
+        if (query) {
+          filter.$or = [
+            { title: { $regex: query, $options: 'i' } },
+            { description: { $regex: query, $options: 'i' } },
+            { location: { $regex: query, $options: 'i' } }
+          ];
+        }
+        const docs = await Listing.find(filter).sort({ createdAt: -1 });
+        return docs.map(d => d.toObject());
+      } catch (err) {
+        console.error("MongoDB getListings error, falling back to JSON:", err.message);
+      }
+    }
+    const data = readJsonDb();
+    if (!data.listings) data.listings = [];
+    let list = data.listings;
+    if (category) {
+      list = list.filter(l => l.category === category);
+    }
+    if (query) {
+      const q = query.toLowerCase();
+      list = list.filter(l => 
+        l.title.toLowerCase().includes(q) || 
+        l.description.toLowerCase().includes(q) || 
+        l.location.toLowerCase().includes(q)
+      );
+    }
+    return list.sort((a, b) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
+  },
+
+  async findListingById(id) {
+    if (this.isMongoConnected()) {
+      try {
+        const doc = await Listing.findById(id);
+        return doc ? doc.toObject() : null;
+      } catch (err) {
+        console.error("MongoDB findListingById error, falling back to JSON:", err.message);
+      }
+    }
+    const data = readJsonDb();
+    if (!data.listings) data.listings = [];
+    return data.listings.find(l => l._id === id) || null;
+  },
+
+  async saveListing(listingObj) {
+    if (this.isMongoConnected()) {
+      try {
+        if (listingObj._id && mongoose.Types.ObjectId.isValid(listingObj._id)) {
+          const doc = await Listing.findById(listingObj._id);
+          if (doc) {
+            Object.assign(doc, listingObj);
+            const saved = await doc.save();
+            return saved.toObject();
+          }
+        }
+        const docNew = new Listing(listingObj);
+        const saved = await docNew.save();
+        return saved.toObject();
+      } catch (err) {
+        console.error("MongoDB saveListing error:", err.message);
+        throw err;
+      }
+    }
+    const data = readJsonDb();
+    if (!data.listings) data.listings = [];
+    if (!listingObj._id) {
+      listingObj._id = 'listing-' + Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+    }
+    const idx = data.listings.findIndex(l => l._id === listingObj._id);
+    const updated = {
+      ...listingObj,
+      updatedAt: new Date().toISOString(),
+      createdAt: listingObj.createdAt || new Date().toISOString()
+    };
+    if (idx !== -1) {
+      data.listings[idx] = updated;
+    } else {
+      data.listings.push(updated);
+    }
+    writeJsonDb(data);
+    return updated;
+  },
+
+  async deleteListing(id, userId) {
+    if (this.isMongoConnected()) {
+      try {
+        const query = { _id: id };
+        const user = await this.findUserByUid(userId);
+        if (user && user.role !== 'admin') {
+          query.userId = userId;
+        }
+        const res = await Listing.deleteOne(query);
+        return res.deletedCount > 0;
+      } catch (err) {
+        console.error("MongoDB deleteListing error, falling back to JSON:", err.message);
+      }
+    }
+    const data = readJsonDb();
+    if (!data.listings) data.listings = [];
+    const initialLen = data.listings.length;
+    const user = data.users.find(u => u.uid === userId);
+    const isAdmin = user && user.role === 'admin';
+    data.listings = data.listings.filter(l => !(l._id === id && (l.userId === userId || isAdmin)));
+    writeJsonDb(data);
+    return data.listings.length < initialLen;
+  },
+
   // Saved Recommendations
   async getSavedRecommendations(userId) {
     if (this.isMongoConnected()) {
@@ -966,7 +1104,6 @@ app.post('/api/auth/register', async (req, res) => {
     const newUser = {
       uid,
       username: trimmedUsername,
-      email: null,
       passwordHash,
       displayName: trimmedDisplayName,
       photoURL: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(trimmedDisplayName)}`,
@@ -1012,6 +1149,10 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(400).json({ error: 'User does not exist.' });
     }
 
+    if (user.isBanned) {
+      return res.status(403).json({ error: 'This account has been banned by administrators.' });
+    }
+
     if (!user.passwordHash) {
       return res.status(400).json({ error: 'Google SSO user. Log in with Google.' });
     }
@@ -1043,6 +1184,33 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// Password Reset Endpoint
+app.post('/api/auth/reset-password', async (req, res) => {
+  const { username, phoneNumber, newPassword } = req.body;
+  if (!username || !newPassword) {
+    return res.status(400).json({ error: 'Username and new password are required.' });
+  }
+
+  try {
+    const user = await DB.findUserByUsername(username);
+    if (!user) {
+      return res.status(404).json({ error: 'User does not exist.' });
+    }
+
+    if (user.phoneNumber && user.phoneNumber !== phoneNumber) {
+      return res.status(400).json({ error: 'Verification failed: Phone number does not match.' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    user.passwordHash = passwordHash;
+    await DB.saveUser(user);
+    res.json({ success: true, message: 'Password reset successfully.' });
+  } catch (err) {
+    console.error('[Password Reset Error]', err);
+    res.status(500).json({ error: 'Failed to reset password.' });
+  }
+});
+
 // Google Single Sign-In Sync
 app.post('/api/auth/google', async (req, res) => {
   const { uid, email, displayName, photoURL } = req.body;
@@ -1052,6 +1220,9 @@ app.post('/api/auth/google', async (req, res) => {
 
   try {
     let user = await DB.findUserByEmail(email);
+    if (user && user.isBanned) {
+      return res.status(403).json({ error: 'This account has been banned by administrators.' });
+    }
     
     if (!user) {
       // Create user record linked to MongoDB
@@ -1123,6 +1294,9 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   try {
     const user = await DB.findUserByUid(req.user.uid);
     if (!user) return res.status(404).json({ error: 'User profile not found.' });
+    if (user.isBanned) {
+      return res.status(403).json({ error: 'This account has been banned by administrators.' });
+    }
     
     res.json({
       uid: user.uid,
@@ -1434,7 +1608,7 @@ const getLocalDiseaseReport = (cropType, language) => {
     return reportsHi[key] || reportsHi.cotton;
   }
 
-  return activeReport;
+  return reports[key] || reports.cotton;
 };
 
 const getLanguageName = (lang) => {
@@ -1463,12 +1637,12 @@ app.post('/api/disease/analyze', authenticateToken, async (req, res) => {
   const isKeyValid = GEMINI_API_KEY.startsWith('AIzaSy') || GEMINI_API_KEY.startsWith('AQ');
 
   if (!GEMINI_API_KEY || !isKeyValid) {
-    return res.json(getLocalDiseaseReport(activeCrop, activeLang));
+    return res.status(400).json({ error: 'Gemini API key is invalid or not configured. Disease diagnostic scanner requires a valid Gemini API key starting with AIzaSy.' });
   }
 
   try {
     const rawData = image.split(',')[1] || image;
-    let geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    let geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     
     const systemInstructionText = `You are KisanAI Crop Diagnostic Agent. You must analyze the crop leaf image and diagnose the disease. You MUST respond strictly in the requested language: ${getLanguageName(activeLang)}. In the treatment section, you must suggest specific chemical or organic medicine names available in India (e.g. Blitox, Mancozeb M-45, Ridomil Gold, Amistar, etc.) and exact dosage parameters. Return the response strictly as a JSON object. The keys of the JSON object MUST remain in English: diseaseName, confidence, description, prevention, treatment, fertilizer. All values corresponding to these keys MUST be written entirely in ${getLanguageName(activeLang)}. Do not include any markdown styling like \`\`\`json or backticks in the response.`;
 
@@ -1509,7 +1683,9 @@ app.post('/api/disease/analyze', authenticateToken, async (req, res) => {
     }
 
     if (!response.ok) {
-      throw new Error(`Gemini status ${response.status}`);
+      const errText = await response.text();
+      console.error(`Gemini API error (disease analyze): status ${response.status}, payload:`, errText);
+      throw new Error(`Gemini status ${response.status} - ${errText}`);
     }
 
     const json = await response.json();
@@ -1542,7 +1718,13 @@ app.post('/api/disease/analyze', authenticateToken, async (req, res) => {
     res.json(parsed);
   } catch (err) {
     console.warn("Gemini backend leaf analyze error, falling back to local fallback:", err.message);
-    res.json(getLocalDiseaseReport(activeCrop, activeLang));
+    try {
+      const fallbackReport = getLocalDiseaseReport(activeCrop, activeLang);
+      res.json(fallbackReport);
+    } catch (fallbackErr) {
+      console.error("Local fallback error:", fallbackErr.message);
+      res.status(500).json({ error: `Gemini API leaf analysis error: ${err.message}` });
+    }
   }
 });
 
@@ -1764,8 +1946,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
   const isKeyValid = GEMINI_API_KEY.startsWith('AIzaSy') || GEMINI_API_KEY.startsWith('AQ');
   if (!GEMINI_API_KEY || !isKeyValid) {
-    const fallbackText = getLocalBotResponse(prompt, activeLang);
-    return res.json({ text: fallbackText });
+    return res.status(400).json({ error: 'Gemini API key is invalid or not configured. Chatbot requires a valid Gemini API key starting with AIzaSy.' });
   }
 
   try {
@@ -1792,7 +1973,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       }
     };
 
-    let geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+    let geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
     let response = await fetchWithRetry(geminiUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1809,7 +1990,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
 
     if (!response.ok) {
-      throw new Error(`Gemini API error: ${response.status}`);
+      const errText = await response.text();
+      console.error(`Gemini API error (chat): status ${response.status}, payload:`, errText);
+      throw new Error(`Gemini API error: ${response.status} - ${errText}`);
     }
 
     const json = await response.json();
@@ -1819,9 +2002,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
     res.json({ text: reply });
   } catch (err) {
-    console.warn("Gemini backend chat error, falling back to local database directly:", err.message);
-    const fallbackText = getLocalBotResponse(prompt, activeLang);
-    res.json({ text: fallbackText });
+    console.error("Gemini backend chat error:", err.message);
+    res.status(500).json({ error: `Gemini API chat error: ${err.message}` });
   }
 });
 
@@ -1889,62 +2071,63 @@ app.post('/api/chat/conversations/:id/messages', authenticateToken, async (req, 
       }
     }
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
+    const isKeyValid = GEMINI_API_KEY.startsWith('AIzaSy') || GEMINI_API_KEY.startsWith('AQ');
+
+    if (!GEMINI_API_KEY || !isKeyValid) {
+      return res.status(400).json({ error: 'Gemini API key is invalid or not configured. Chatbot requires a valid Gemini API key starting with AIzaSy.' });
+    }
 
     let reply = '';
-    const isKeyValid = GEMINI_API_KEY.startsWith('AIzaSy') || GEMINI_API_KEY.startsWith('AQ');
-    if (GEMINI_API_KEY && isKeyValid) {
-      try {
-        const contents = [];
-        conv.messages.slice(0, -1).forEach(m => {
-          contents.push({
-            role: m.sender === 'user' ? 'user' : 'model',
-            parts: [{ text: m.text }]
-          });
-        });
+    try {
+      const contents = [];
+      conv.messages.slice(0, -1).forEach(m => {
         contents.push({
-          role: 'user',
-          parts: [{ text: text }]
+          role: m.sender === 'user' ? 'user' : 'model',
+          parts: [{ text: m.text }]
         });
+      });
+      contents.push({
+        role: 'user',
+        parts: [{ text: text }]
+      });
 
-        const systemInstructionText = `You are KisanAI Copilot, an expert agricultural bot advising Indian farmers. Provide clear, direct actionable recommendations. You MUST respond in ${getLanguageName(activeLang)}. Make your response context-aware and focused on agriculture (soils, crops, fertilizers, irrigation, pests).`;
+      const systemInstructionText = `You are KisanAI Copilot, an expert agricultural bot advising Indian farmers. Provide clear, direct actionable recommendations. You MUST respond in ${getLanguageName(activeLang)}. Make your response context-aware and focused on agriculture (soils, crops, fertilizers, irrigation, pests).`;
 
-        const requestPacket = {
-          contents,
-          systemInstruction: {
-            parts: [{ text: systemInstructionText }]
-          }
-        };
+      const requestPacket = {
+        contents,
+        systemInstruction: {
+          parts: [{ text: systemInstructionText }]
+        }
+      };
 
-        let geminiUrl = `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-        let response = await fetchWithRetry(geminiUrl, {
+      let geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      let response = await fetchWithRetry(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestPacket)
+      });
+
+      if (!response.ok && response.status === 404) {
+        geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+        response = await fetchWithRetry(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(requestPacket)
+          body: JSON.stringify({ contents })
         });
-
-        if (!response.ok && response.status === 404) {
-          geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
-          response = await fetchWithRetry(geminiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents })
-          });
-        }
-
-        if (response.ok) {
-          const json = await response.json();
-          reply = getSafeCandidateText(json);
-          if (!reply) {
-            reply = getLocalBotResponse(text, activeLang);
-          }
-        } else {
-          reply = getLocalBotResponse(text, activeLang);
-        }
-      } catch (err) {
-        reply = getLocalBotResponse(text, activeLang);
       }
-    } else {
-      reply = getLocalBotResponse(text, activeLang);
+
+      if (!response.ok) {
+        throw new Error(`Gemini API call failed with status ${response.status}`);
+      }
+
+      const json = await response.json();
+      reply = getSafeCandidateText(json);
+      if (!reply) {
+        throw new Error("Empty response returned from Gemini API");
+      }
+    } catch (err) {
+      console.error("Gemini session send message failure:", err);
+      return res.status(500).json({ error: `Gemini API message error: ${err.message}` });
     }
 
     const botMsg = {
@@ -2042,64 +2225,134 @@ app.post('/api/chat/recommendations/:id/delete', authenticateToken, async (req, 
 
 // ==================== LIVE WEATHER PROXY API ====================
 
-function getLocalWeatherAdvisory(temp, humidity, rainChance, windSpeed, crop) {
+const WEATHER_TRANSLATIONS = {
+  en: {
+    rain_alert: 'Heavy Rain Alert: Severe rain predicted. Skip irrigation and protect harvested crops.',
+    heat_alert: 'Heat Wave Alert: Extreme heat wave warning. Irrigate crop regularly to prevent wilting.',
+    frost_alert: 'Frost Alert: Potential crop frost damage. Take protective shielding measures.',
+    wind_alert: 'Strong Wind Alert: High velocity winds. Postpone pesticide sprays and secure crop stakes.',
+    adv_rain: (crop) => `• Irrigation: Skip watering ${crop} crop to prevent waterlogging.\n• Spraying: Do not spray pesticide as it will leach.\n• Harvest: Move harvested crop to dry storage immediately.`,
+    adv_wind: (crop) => `• Irrigation: Standard watering required.\n• Spraying: Postpone pesticide spray due to drift hazard.\n• Harvest: Secure shelter structures.`,
+    adv_humidity: (crop) => `• Irrigation: Keep drainage channels active.\n• Spraying: High fungal risk, spray systemic fungicide.\n• Harvest: Dry yields thoroughly.`,
+    adv_default: (crop) => `• Irrigation: Proceed with standard drip cycle.\n• Spraying: Weather is optimal for nitrogen/pest spraying.\n• Harvest: Safe to harvest crop now.`
+  },
+  te: {
+    rain_alert: 'α░¡α░╛α░░α▒Ç α░╡α░░α▒ìα░╖ α░╣α▒åα░Üα▒ìα░Üα░░α░┐α░ò: α░ñα▒Çα░╡α▒ìα░░α░«α▒êα░¿ α░╡α░░α▒ìα░╖α░é α░¬α░íα▒ç α░àα░╡α░òα░╛α░╢α░é α░ëα░éα░ªα░┐. α░¿α▒Çα░ƒα░┐ α░¬α░╛α░░α▒üα░ªα░▓α░¿α░┐ α░¿α░┐α░▓α░┐α░¬α░┐α░╡α▒çα░»α░éα░íα░┐ α░«α░░α░┐α░»α▒ü α░òα▒ïα░╕α░┐α░¿ α░¬α░éα░ƒα░¿α▒ü α░░α░òα▒ìα░╖α░┐α░éα░Üα░éα░íα░┐.',
+    heat_alert: 'α░╡α░íα░ùα░╛α░▓α▒ìα░¬α▒üα░▓ α░╣α▒åα░Üα▒ìα░Üα░░α░┐α░ò: α░ñα▒Çα░╡α▒ìα░░α░«α▒êα░¿ α░╡α▒çα░íα░┐ α░╡α░╛α░ñα░╛α░╡α░░α░úα░é. α░¬α░éα░ƒ α░Äα░éα░íα░┐α░¬α▒ïα░òα▒üα░éα░íα░╛ α░¿α░┐α░ñα▒ìα░»α░é α░¿α▒Çα░░α▒ü α░¬α▒åα░ƒα▒ìα░ƒα░éα░íα░┐.',
+    frost_alert: 'α░ñα▒üα░╖α░╛α░░ α░╣α▒åα░Üα▒ìα░Üα░░α░┐α░ò: α░¬α░éα░ƒα░òα▒ü α░ñα▒üα░╖α░╛α░░ α░¿α░╖α▒ìα░ƒα░é α░£α░░α░┐α░ùα▒ç α░àα░╡α░òα░╛α░╢α░é α░ëα░éα░ªα░┐. α░░α░òα▒ìα░╖α░ú α░Üα░░α▒ìα░»α░▓α▒ü α░ñα▒Çα░╕α▒üα░òα▒ïα░éα░íα░┐.',
+    wind_alert: 'α░êα░ªα▒üα░░α▒ü α░ùα░╛α░▓α▒üα░▓ α░╣α▒åα░Üα▒ìα░Üα░░α░┐α░ò: α░¼α░▓α░«α▒êα░¿ α░ùα░╛α░▓α▒üα░▓α▒ü α░╡α▒Çα░Üα▒ç α░àα░╡α░òα░╛α░╢α░é α░ëα░éα░ªα░┐. α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Çα░¿α░┐ α░╡α░╛α░»α░┐α░ªα░╛ α░╡α▒çα░»α░éα░íα░┐.',
+    adv_rain: (crop) => `• α░¿α▒Çα░ƒα░┐ α░»α░╛α░£α░«α░╛α░¿α▒ìα░»α░é: α░àα░ºα░┐α░ò α░ñα▒çα░«α░¿α▒ü α░¿α░┐α░╡α░╛α░░α░┐α░éα░Üα░íα░╛α░¿α░┐α░òα░┐ ${crop} α░¬α░éα░ƒα░òα▒ü α░¿α▒Çα░░α▒ü α░¬α▒åα░ƒα▒ìα░ƒα░íα░é α░¿α░┐α░▓α░┐α░¬α░┐α░╡α▒çα░»α░éα░íα░┐.\n• α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Ç: α░╡α░░α▒ìα░╖α░é α░╡α░▓α▒ìα░▓ α░òα░íα░┐α░ùα░┐α░╡α▒çα░»α░¼α░íα▒üα░ñα▒üα░éα░ªα░┐ α░òα░╛α░¼α░ƒα▒ìα░ƒα░┐ α░«α░éα░ªα▒üα░▓α▒ü α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Ç α░Üα▒çα░»α░╡α░ªα▒ìα░ªα▒ü.\n• α░òα▒ïα░ñ: α░òα▒ïα░╕α░┐α░¿ α░¬α░éα░ƒα░¿α▒ü α░╡α▒åα░éα░ƒα░¿α▒ç α░¬α▒èα░íα░┐ α░¿α░┐α░▓α▒ìα░╡ α░¬α▒ìα░░α░ªα▒çα░╢α░╛α░¿α░┐α░òα░┐ α░ñα░░α░▓α░┐α░éα░Üα░éα░íα░┐.`,
+    adv_wind: (crop) => `• α░¿α▒Çα░ƒα░┐ α░»α░╛α░£α░«α░╛α░¿α▒ìα░»α░é: α░╕α░╛α░ºα░╛α░░α░ú α░¿α▒Çα░ƒα░┐ α░¬α░╛α░░α▒üα░ªα░▓ α░àα░╡α░╕α░░α░é.\n• α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Ç: α░ùα░╛α░▓α░┐ α░╡α▒çα░ùα░é α░╡α░▓α▒ìα░▓ α░òα▒èα░ƒα▒ìα░ƒα▒üα░òα▒üα░¬α▒ïα░»α▒ç α░¬α▒ìα░░α░«α░╛α░ªα░é α░ëα░¿α▒ìα░¿α░éα░ªα▒üα░¿ α░«α░éα░ªα▒üα░▓ α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Çα░¿α░┐ α░╡α░╛α░»α░┐α░ªα░╛ α░╡α▒çα░»α░éα░íα░┐.\n• α░òα▒ïα░ñ: α░¬α░éα░ƒ α░åα░╢α▒ìα░░α░» α░¿α░┐α░░α▒ìα░«α░╛α░úα░╛α░▓α░¿α▒ü α░╕α▒üα░░α░òα▒ìα░╖α░┐α░ñα░é α░Üα▒çα░»α░éα░íα░┐.`,
+    adv_humidity: (crop) => `• α░¿α▒Çα░ƒα░┐ α░»α░╛α░£α░«α░╛α░¿α▒ìα░»α░é: α░íα▒ìα░░α▒êα░¿α▒çα░£α▒Ç α░òα░╛α░▓α▒üα░╡α░▓α░¿α▒ü α░╕α░òα▒ìα░░α░┐α░»α░éα░ùα░╛ α░ëα░éα░Üα░éα░íα░┐.\n• α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Ç: α░╢α░┐α░▓α▒Çα░éα░ºα▒ìα░░α░╛α░▓ α░¬α▒ìα░░α░«α░╛α░ªα░é α░Äα░òα▒ìα░òα▒üα░╡α░ùα░╛ α░ëα░éα░ªα░┐, α░░α░òα▒ìα░╖α░┐α░ñ α░╢α░┐α░▓α▒Çα░éα░ªα▒ìα░░α░¿α░╛α░╢α░òα░╛α░¿α▒ìα░¿α░┐ α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Ç α░Üα▒çα░»α░éα░íα░┐.\n• α░òα▒ïα░ñ: α░¬α░éα░ƒ α░ªα░┐α░ùα▒üα░¼α░íα░┐α░¿α░┐ α░¬α▒éα░░α▒ìα░ñα░┐α░ùα░╛ α░Äα░éα░íα░¼α▒åα░ƒα▒ìα░ƒα░éα░íα░┐.`,
+    adv_default: (crop) => `• α░¿α▒Çα░ƒα░┐ α░»α░╛α░£α░«α░╛α░¿α▒ìα░»α░é: α░¬α▒ìα░░α░╛α░«α░╛α░úα░┐α░ò α░íα▒ìα░░α░┐α░¬α▒ì α░╕α▒êα░òα░┐α░▓α▒ì•α░ñα▒ï α░òα▒èα░¿α░╕α░╛α░ùα░éα░íα░┐.\n• α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Ç: α░¿α░ñα▒ìα░░α░£α░¿α░┐ α░▓α▒çα░ªα░╛ α░ñα▒åα░ùα▒üα░│α▒ìα░▓ α░¬α░┐α░Üα░┐α░òα░╛α░░α▒Çα░òα░┐ α░╡α░╛α░ñα░╛α░╡α░░α░úα░é α░àα░¿α▒üα░òα▒éα░▓α░éα░ùα░╛ α░ëα░éα░ªα░┐.\n• α░òα▒ïα░ñ: α░çα░¬α▒ìα░¬α▒üα░íα▒ü α░¬α░éα░ƒα░¿α▒ü α░òα▒ïα░»α░íα░é α░╕α▒üα░░α░òα▒ìα░╖α░┐α░ñα░é.`
+  },
+  hi: {
+    rain_alert: 'αñ¡αñ╛αñ░αÑÇ αñ¼αñ╛αñ░αñ┐αñ╢ αñòαÑÇ αñÜαÑçαññαñ╛αñ╡αñ¿αÑÇ: αñ¡αñ╛αñ░αÑÇ αñ¼αñ╛αñ░αñ┐αñ╢ αñòαÑÇ αñ¡αñ╡αñ┐αñ╖αÑìαñ»αñ╡αñ╛αñúαÑÇαÑñ αñ╕αñ┐αñéαñÜαñ╛αñê αñ░αÑïαñòαÑçαñé αñöαñ░ αñòαñƒαÑÇ αñ╣αÑüαñê αñ½αñ╕αñ▓αÑïαñé αñòαÑÇ αñ░αñòαÑìαñ╖αñ╛ αñòαñ░αÑçαñéαÑñ',
+    heat_alert: 'αñ▓αÑé αñòαÑÇ αñÜαÑçαññαñ╛αñ╡αñ¿αÑÇ: αñàαññαÑìαñ»αñºαñ┐αñò αñ▓αÑé αñòαÑÇ αñÜαÑçαññαñ╛αñ╡αñ¿αÑÇαÑñ αñ╕αÑéαñûαñ¿αÑç αñ╕αÑç αñ¼αñÜαñ╛αñ¿αÑç αñòαÑç αñ▓αñ┐αñÅ αñ½αñ╕αñ▓ αñòαÑÇ αñ¿αñ┐αñ»αñ«αñ┐αññ αñ╕αñ┐αñéαñÜαñ╛αñê αñòαñ░αÑçαñéαÑñ',
+    frost_alert: 'αñ¬αñ╛αñ▓αñ╛ αñÜαÑçαññαñ╛αñ╡αñ¿αÑÇ: αñ╕αñéαñ¡αñ╛αñ╡αñ┐αññ αñ¬αñ╛αñ▓αñ╛ αñòαÑìαñ╖αññαñ┐αÑñ αñ╕αÑüαñ░αñòαÑìαñ╖αñ╛αññαÑìαñ«αñò αñëαñ¬αñ╛αñ» αñòαñ░αÑçαñéαÑñ',
+    wind_alert: 'αññαÑçαñ£ αñ╣αñ╡αñ╛ αñòαÑÇ αñÜαÑçαññαñ╛αñ╡αñ¿αÑÇ: αññαÑçαñ£ αñ╣αñ╡αñ╛αñÅαñé αñÜαñ▓αñ¿αÑç αñòαÑÇ αñåαñ╢αñéαñòαñ╛αÑñ αñòαÑÇαñƒαñ¿αñ╛αñ╢αñò αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡ αñ╕αÑìαñÑαñùαñ┐αññ αñòαñ░αÑçαñéαÑñ',
+    adv_rain: (crop) => `• αñ╕αñ┐αñéαñÜαñ╛αñê: αñ£αñ▓αñ¡αñ░αñ╛αñ╡ αñ╕αÑç αñ¼αñÜαñ¿αÑç αñòαÑç αñ▓αñ┐αñÅ ${crop} αñòαÑÇ αñ╕αñ┐αñéαñÜαñ╛αñê αñ░αÑïαñòαÑçαñéαÑñ\n• αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡: αñòαÑÇαñƒαñ¿αñ╛αñ╢αñò αñòαñ╛ αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡ αñ¿ αñòαñ░αÑçαñé αñòαÑìαñ»αÑïαñéαñòαñ┐ αñ»αñ╣ αñºαÑüαñ▓ αñ£αñ╛αñÅαñùαñ╛αÑñ\n• αñòαñƒαñ╛αñê: αñòαñƒαÑÇ αñ╣αÑüαñê αñ½αñ╕αñ▓ αñòαÑï αññαÑüαñ░αñéαññ αñ╕αÑéαñûαÑç αñ╕αÑìαñÑαñ╛αñ¿ αñ¬αñ░ αñ▓αÑç αñ£αñ╛αñÅαñéαÑñ`,
+    adv_wind: (crop) => `• αñ╕αñ┐αñéαñÜαñ╛αñê: αñ╕αñ╛αñ«αñ╛αñ¿αÑìαñ» αñ╕αñ┐αñéαñÜαñ╛αñê αñòαÑÇ αñåαñ╡αñ╢αÑìαñ»αñòαññαñ╛ αñ╣αÑêαÑñ\n• αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡: αññαÑçαñ£ αñ╣αñ╡αñ╛ αñòαÑç αñòαñ╛αñ░αñú αñòαÑÇαñƒαñ¿αñ╛αñ╢αñò αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡ αñ╕αÑìαñÑαñùαñ┐αññ αñòαñ░αÑçαñéαÑñ\n• αñòαñƒαñ╛αñê: αñ½αñ╕αñ▓ αñåαñ╢αÑìαñ░αñ»αÑïαñé αñòαÑï αñ╕αÑüαñ░αñòαÑìαñ╖αñ┐αññ αñòαñ░αÑçαñéαÑñ`,
+    adv_humidity: (crop) => `• αñ╕αñ┐αñéαñÜαñ╛αñê: αñ£αñ▓ αñ¿αñ┐αñòαñ╛αñ╕αÑÇ αñÜαÑêαñ¿αñ▓αÑïαñé αñòαÑï αñÜαñ╛αñ▓αÑé αñ░αñûαÑçαñéαÑñ\n• αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡: αñëαñÜαÑìαñÜ αñòαñ╡αñò αñ£αÑïαñûαñ┐αñ«, αñ¬αÑìαñ░αñúαñ╛αñ▓αÑÇαñùαññ αñòαñ╡αñòαñ¿αñ╛αñ╢αÑÇ αñòαñ╛ αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡ αñòαñ░αÑçαñéαÑñ\n• αñòαñƒαñ╛αñê: αñòαñƒαÑÇ αñ╣αÑüαñê αñ½αñ╕αñ▓ αñòαÑï αñàαñÜαÑìαñ¢αÑÇ αññαñ░αñ╣ αñ╕αÑüαñûαñ╛αñÅαñéαÑñ`,
+    adv_default: (crop) => `• αñ╕αñ┐αñéαñÜαñ╛αñê: αñ«αñ╛αñ¿αñò αñíαÑìαñ░αñ┐αñ¬ αñ╕αñ┐αñéαñÜαñ╛αñê αñÜαñòαÑìαñ░ αñòαñ╛ αñ¬αñ╛αñ▓αñ¿ αñòαñ░αÑçαñéαÑñ\n• αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡: αñëαñ░αÑìαñ╡αñ░αñò/αñòαÑÇαñƒαñ¿αñ╛αñ╢αñò αñ¢αñ┐αñíαñ╝αñòαñ╛αñ╡ αñòαÑç αñ▓αñ┐αñÅ αñ«αÑîαñ╕αñ« αñàαñ¿αÑüαñòαÑéαñ▓ αñ╣αÑêαÑñ\n• αñòαñƒαñ╛αñê: αñ½αñ╕αñ▓ αñòαÑÇ αñòαñƒαñ╛αñê αñòαñ░αñ¿αñ╛ αñ╕αÑüαñ░αñòαÑìαñ╖αñ┐αññ αñ╣αÑêαÑñ`
+  },
+  ta: {
+    rain_alert: 'α«òα«⌐α««α«┤α»ê α«Äα«Üα»ìα«Üα«░α«┐α«òα»ìα«òα»ê: α«òα«⌐α««α«┤α»ê α«¬α»åα«»α»ìα«»α«òα»ìα«òα»éα«ƒα»üα««α»ì. α«¬α«╛α«Üα«⌐α«ñα»ìα«ñα»êα«ñα»ì α«ñα«╡α«┐α«░α»ìα«ñα»ìα«ñα»ü, α«àα«▒α»üα«╡α«ƒα»ê α«Üα»åα«»α»ìα«ñ α«¬α«»α«┐α«░α»ìα«òα«│α»êα«¬α»ì α«¬α«╛α«ñα»üα«òα«╛α«òα»ìα«òα«╡α»üα««α»ì.',
+    heat_alert: 'α«╡α»åα«¬α»ìα«¬ α«àα«▓α»ê α«Äα«Üα»ìα«Üα«░α«┐α«òα»ìα«òα»ê: α«òα«ƒα»üα««α»êα«»α«╛α«⌐ α«╡α»åα«¬α»ìα«¬ α«àα«▓α»ê α«Äα«Üα»ìα«Üα«░α«┐α«òα»ìα«òα»ê. α«¬α«»α«┐α«░α»ì α«╡α«╛α«ƒα»üα«╡α«ñα»êα«ñα»ì α«ñα«ƒα»üα«òα»ìα«ò α«╡α«┤α«òα»ìα«òα««α«╛α«ò α«¿α»Çα«░α»ì α«¬α«╛α«»α»ìα«Üα»ìα«Üα«╡α»üα««α»ì.',
+    frost_alert: 'α«¬α«⌐α«┐ α«Äα«Üα»ìα«Üα«░α«┐α«òα»ìα«òα»ê: α«¬α«»α«┐α«░α»ì α«¬α«⌐α«┐ α«Üα»çα«ñα««α«ƒα»êα«» α«╡α«╛α«»α»ìα«¬α»ìα«¬α»üα«│α»ìα«│α«ñα»ü. α«¬α«╛α«ñα»üα«òα«╛α«¬α»ìα«¬α»ü α«¿α«ƒα«╡α«ƒα«┐α«òα»ìα«òα»êα«òα«│α»ê α«Äα«ƒα»üα«òα»ìα«òα«╡α»üα««α»ì.',
+    wind_alert: 'α«¬α«▓α«ñα»ìα«ñ α«òα«╛α«▒α»ìα«▒α»ü α«Äα«Üα»ìα«Üα«░α«┐α«òα»ìα«òα»ê: α«àα«ñα«┐α«╡α»çα«ò α«òα«╛α«▒α»ìα«▒α»ü α«╡α»Çα«Üα«òα»ìα«òα»éα«ƒα»üα««α»ì. α«¬α»éα«Üα»ìα«Üα«┐α«òα»ìα«òα»èα«▓α»ìα«▓α«┐ α«ñα»åα«│α«┐α«¬α»ìα«¬α«ñα»êα«ñα»ì α«ñα«│α»ìα«│α«┐α«¬α»ìα«¬α»ïα«ƒα«╡α»üα««α»ì.',
+    adv_rain: (crop) => `• α«¿α»Çα«░α»ìα«¬α»ìα«¬α«╛α«Üα«⌐α««α»ì: α«ñα»çα«òα»ìα«òα«ñα»ìα«ñα»êα«ñα»ì α«ñα«ƒα»üα«òα»ìα«ò ${crop} α«¬α«»α«┐α«░α»üα«òα»ìα«òα»ü α«¿α»Çα«░α»ì α«¬α«╛α«»α»ìα«Üα»ìα«Üαºüα«╡α«ñα»êα«ñα»ì α«ñα«╡α«┐α«░α»ìα«òα»ìα«òα«╡α»üα««α»ì.\n• α«ñα»åα«│α«┐α«ñα»ìα«ñα«▓α»ì: α«¬α»éα«Üα»ìα«Üα«┐α«òα»ìα«òα»èα«▓α»ìα«▓α«┐ α««α«░α»üα«¿α»ìα«ñα»ü α«ñα»åα«│α«┐α«òα»ìα«ò α«╡α»çα«úα»ìα«ƒα«╛α««α»ì, α«àα«ñα»ü α«òα«░α»êα«¿α»ìα«ñα»üα«╡α«┐α«ƒα»üα««α»ì.\n• α«àα«▒α»üα«╡α«ƒα»ê: α«àα«▒α»üα«╡α«ƒα»ê α«Üα»åα«»α»ìα«ñ α«¬α«»α«┐α«░α»ìα«òα«│α»ê α«ëα«ƒα«⌐α«ƒα«┐α«»α«╛α«ò α«ëα«▓α«░α»ìα«¿α»ìα«ñ α«Üα»çα┤«α┤┐α«¬α»ìα«¬α»üα«òα»ìα«òα»ü α««α«╛α«▒α»ìα«▒α«╡α»üα««α»ì.`,
+    adv_wind: (crop) => `• α«¿α»Çα«░α»ìα«¬α»ìα«¬α«╛α«Üα«⌐α««α»ì: α«Üα«╛α«ñα«╛α«░α«ú α«¿α»Çα«░α»ìα«¬α»ìα«¬α«╛α«Üα«⌐α««α»ì α«ñα»çα«╡α»ê.\n• α«ñα»åα«│α«┐α«ñα»ìα«ñα«▓α»ì: α«òα«╛α«▒α»ìα«▒α»ü α«òα«╛α«░α«úα««α«╛α«ò α«¬α»éα«Üα»ìα«Üα«┐α«òα»ìα«òα»èα«▓α»ìα«▓α«┐ α«ñα»åα«│α«┐α«¬α»ìα«¬α«ñα»êα«ñα»ì α«ñα«│α»ìα«│α«┐α«¬α»ìα«¬α»ïα«ƒα«╡α»üα««α»ì.\n• α«àα«▒α»üα«╡α«ƒα»ê: α«¬α«»α«┐α«░α»ì α«åα«ñα«░α«╡α»ü α«òα«ƒα»ìα«ƒα««α»êα«¬α»ìα«¬α»üα«òα«│α»êα«¬α»ì α«¬α«╛α«ñα»üα«òα«╛α«òα»ìα«òα«╡α»üα««α»ì.`,
+    adv_humidity: (crop) => `• α«¿α»Çα«░α»ìα«¬α»ìα«¬α«╛α«Üα«⌐α««α»ì: α«╡α«ƒα«┐α«òα«╛α«▓α»ì α«╡α«╛α«»α»ìα«òα»ìα«òα«╛α«▓α»ìα«òα«│α»êα«Üα»ì α«Üα»åα«»α«▓α»ìα«¬α«╛α«ƒα»ìα«ƒα«┐α«▓α»ì α«╡α»êα«òα»ìα«òα«╡α»üα««α»ì.\n• α«ñα»åα«│α«┐α«ñα»ìα«ñα«▓α»ì: α«¬α»éα«₧α»ìα«Üα»ê α«ñα»èα«▒α»ìα«▒α»ü α«àα«¬α«╛α«»α««α»ì α«àα«ñα«┐α«òα««α»ì, α«¬α»éα«₧α»ìα«Üα»êα«òα»ì α«òα»èα«▓α»ìα«▓α«┐α«»α»êα«ñα»ì α«ñα»åα«│α«┐α«òα»ìα«òα«╡α»üα««α»ì.\n• α«àα«▒α»üα«╡α«ƒα»ê: α«╡α«┐α«│α»êα«Üα»ìα«Üα«▓α»ê α«¿α«⌐α»ìα«òα»ü α«ëα«▓αª░ α«╡α»êα«òα»ìα«òα«╡α»üα««α»ì.`,
+    adv_default: (crop) => `• α«¿α»Çα«░α»ìα«¬α»ìα«¬α«╛α«Üα«⌐α««α»ì: α«¿α«┐α«▓α»êα«»α«╛α«⌐ α«Üα»èα«ƒα»ìα«ƒα»ü α«¿α»Çα«░α»ì α«¬α«╛α«Üα«⌐α«ñα»ìα«ñα»êα«ñα»ì α«ñα»èα«ƒα«░α«╡α»üα««α»ì.\n• α«ñα»åα«│α«┐α«ñα»ìα«ñα«▓α»ì: α«ëα«░α««α»ì/α«¬α»éα«Üα»ìα«Üα«┐ α««α«░α»üα«¿α»ìα«ñα»ü α«ñα»åα«│α«┐α«òα»ìα«ò α«╡α«╛α«⌐α«┐α«▓α»ê α«Üα«╛α«ñα«òα««α«╛α«ò α«ëα«│α»ìα«│α«ñα»ü.\n• α«àα«▒α»üα«╡α«ƒα»ê: α«¬α«»α«┐α«░α»ê α«àα«▒α»üα«╡α«ƒα»ê α«Üα»åα«»α»ìα«» α«çα«ñα»ü α«Üα«░α«┐α«»α«╛α«⌐ α«¿α»çα«░α««α»ì.`
+  },
+  kn: {
+    rain_alert: 'α▓¡α▓╛α▓░α│Ç α▓«α▓│α│å α▓«α│üα▓¿α│ìα▓¿α│åα▓Üα│ìα▓Üα▓░α▓┐α▓òα│å: α▓¡α▓╛α▓░α│Ç α▓«α▓│α│åα▓» α▓«α│üα▓¿α│ìα▓╕α│éα▓Üα▓¿α│å. α▓¿α│Çα▓░α▓╛α▓╡α▓░α▓┐α▓»α▓¿α│ìα▓¿α│ü α▓¿α▓┐α▓▓α│ìα▓▓α▓┐α▓╕α▓┐ α▓«α▓ñα│ìα▓ñα│ü α▓òα▓ƒα▓╛α▓╡α│ü α▓«α▓╛α▓íα▓┐α▓ª α▓¼α│åα▓│α│åα▓ùα▓│α▓¿α│ìα▓¿α│ü α▓░α▓òα│ìα▓╖α▓┐α▓╕α▓┐.',
+    heat_alert: 'α▓¼α▓┐α▓╕α▓┐α▓ùα▓╛α▓│α▓┐ α▓«α│üα▓¿α│ìα▓¿α│åα▓Üα│ìα▓Üα▓░α▓┐α▓òα│å: α▓ñα│Çα▓╡α│ìα▓░ α▓¼α▓┐α▓╕α▓┐α▓ùα▓╛α▓│α▓┐ α▓«α│üα▓¿α│ìα▓¿α│åα▓Üα│ìα▓Üα▓░α▓┐α▓òα│å. α▓¼α│åα▓│α│å α▓Æα▓úα▓ùα▓ªα▓éα▓ñα│å α▓¿α▓┐α▓»α▓«α▓┐α▓ñα▓╡α▓╛α▓ùα▓┐ α▓¿α│Çα▓░α│üα▓úα▓┐α▓╕α▓┐.',
+    frost_alert: 'α▓╣α▓┐α▓« α▓«α│üα▓¿α│ìα▓¿α│åα▓Üα│ìα▓Üα▓░α▓┐α▓òα│å: α▓╣α▓┐α▓«α▓ªα▓┐α▓éα▓ª α▓¼α│åα▓│α│å α▓╣α▓╛α▓¿α▓┐α▓»α▓╛α▓ùα│üα▓╡ α▓╕α▓╛α▓ºα│ìα▓»α▓ñα│å. α▓░α▓òα│ìα▓╖α▓úα▓╛α▓ñα│ìα▓«α▓ò α▓òα│ìα▓░α▓«α▓ùα▓│α▓¿α│ìα▓¿α│ü α▓òα│êα▓ùα│èα▓│α│ìα▓│α▓┐.',
+    wind_alert: 'α▓¼α▓▓α▓╡α▓╛α▓ª α▓ùα▓╛α▓│α▓┐ α▓«α│üα▓¿α│ìα▓¿α│åα▓Üα│ìα▓Üα▓░α▓┐α▓òα│å: α▓¼α▓┐α▓░α│üα▓ùα▓╛α▓│α▓┐ α▓¼α│Çα▓╕α│üα▓╡ α▓╕α▓╛α▓ºα│ìα▓»α▓ñα│å. α▓òα│Çα▓ƒα▓¿α▓╛α▓╢α▓ò α▓╕α▓┐α▓éα▓¬α▓íα▓úα│åα▓»α▓¿α│ìα▓¿α│ü α▓«α│üα▓éα▓ªα│éα▓íα▓┐.',
+    adv_rain: (crop) => `• α▓¿α│Çα▓░α▓╛α▓╡α▓░α▓┐: α▓¿α│Çα▓░α│ü α▓¿α▓┐α▓▓α│ìα▓▓α▓ªα▓éα▓ñα│å α▓ñα▓íα│åα▓»α▓▓α│ü ${crop} α▓¼α│åα▓│α│åα▓ùα│å α▓¿α│Çα▓░α│üα▓úα▓┐α▓╕α│üα▓╡α│üα▓ªα▓¿α│ìα▓¿α│ü α▓¿α▓┐α▓▓α│ìα▓▓α▓┐α▓╕α▓┐.\n• α▓╕α▓┐α▓éα▓¬α▓íα▓úα│å: α▓«α▓│α│åα▓ùα│å α▓ñα│èα▓│α│åα▓ªα│ü α▓╣α│ïα▓ùα│üα▓╡α│üα▓ªα▓░α▓┐α▓éα▓ª α▓òα│Çα▓ƒα▓¿α▓╛α▓╢α▓ò α▓╕α▓┐α▓éα▓¬α▓íα▓┐α▓╕α▓¼α│çα▓íα▓┐.\n• α▓òα▓ƒα▓╛α▓╡α│ü: α▓òα▓ƒα▓╛α▓╡α│ü α▓«α▓╛α▓íα▓┐α▓ª α▓¼α│åα▓│α│åα▓»α▓¿α│ìα▓¿α│ü α▓ñα▓òα│ìα▓╖α▓úα▓╡α│ç α▓Æα▓úα▓ùα▓┐α▓ª α▓ªα▓╛α▓╕α│ìα▓ñα▓╛α▓¿α│ü α▓òα│èα▓áα▓íα▓┐α▓ùα│å α▓╕α│ìα▓Ñα▓│α▓╛α▓éα▓ñα▓░α▓┐α▓╕α▓┐.`,
+    adv_wind: (crop) => `• α▓¿α│Çα▓░α▓╛α▓╡α▓░α▓┐: α▓╕α▓╛α▓«α▓╛α▓¿α│ìα▓» α▓¿α│Çα▓░α▓╛α▓╡α▓░α▓┐ α▓àα▓ùα▓ñα│ìα▓»α▓╡α▓┐α▓ªα│å.\n• α▓╕α▓┐α▓éα▓¬α▓íα▓úα│å: α▓¼α▓┐α▓░α│üα▓ùα▓╛α▓│α▓┐ α▓çα▓░α│üα▓╡α│üα▓ªα▓░α▓┐α▓éα▓ª α▓òα│Çα▓ƒα▓¿α▓╛α▓╢α▓ò α▓╕α▓┐α▓éα▓¬α▓íα▓úα│åα▓»α▓¿α│ìα▓¿α│ü α▓«α│üα▓éα▓ªα│éα▓íα▓┐.\n• α▓òα▓ƒα▓╛α▓╡α│ü: α▓¼α│åα▓│α│å α▓åα▓╢α│ìα▓░α▓» α▓░α▓Üα▓¿α│åα▓ùα▓│α▓¿α│ìα▓¿α│ü α▓¡α▓ªα│ìα▓░α▓¬α▓íα▓┐α▓╕α▓┐.`,
+    adv_humidity: (crop) => `• α▓¿α│Çα▓░α▓╛α▓╡α▓░α▓┐: α▓¿α│Çα▓░α│ü α▓╣α▓░α▓┐α▓ªα│üα▓╣α│ïα▓ùα│üα▓╡ α▓òα▓╛α▓▓α│üα▓╡α│åα▓ùα▓│α▓¿α│ìα▓¿α│ü α▓╕α▓òα│ìα▓░α▓┐α▓»α▓╡α▓╛α▓ùα▓┐α▓íα▓┐.\n• α▓╕α▓┐α▓éα▓¬α▓íα▓úα│å: α▓╢α▓┐α▓▓α│Çα▓éα▓ºα│ìα▓░ α▓¼α▓╛α▓ºα│åα▓» α▓àα▓¬α▓╛α▓» α▓╣α│åα▓Üα│ìα▓Üα│ü, α▓╢α▓┐α▓▓α│Çα▓éα▓ºα│ìα▓░α▓¿α▓╛α▓╢α▓ò α▓╕α▓┐α▓éα▓¬α▓íα▓┐α▓╕α▓┐.\n• α▓òα▓ƒα▓╛α▓╡α│ü: α▓çα▓│α│üα▓╡α▓░α▓┐α▓»α▓¿α│ìα▓¿α│ü α▓Üα│åα▓¿α│ìα▓¿α▓╛α▓ùα▓┐ α▓Æα▓úα▓ùα▓┐α▓╕α▓┐.`,
+    adv_default: (crop) => `• α▓¿α│Çα▓░α▓╛α▓╡α▓░α▓┐: α▓¬α│ìα▓░α▓«α▓╛α▓úα▓┐α▓ñ α▓╣α▓¿α▓┐ α▓¿α│Çα▓░α▓╛α▓╡α▓░α▓┐ α▓Üα▓òα│ìα▓░α▓╡α▓¿α│ìα▓¿α│ü α▓«α│üα▓éα▓ªα│üα▓╡α▓░α▓┐α▓╕α▓┐.\n• α▓╕α▓┐α▓éα▓¬α▓íα▓úα│å: α▓ùα│èα▓¼α│ìα▓¼α▓░/α▓òα│Çα▓ƒα▓¿α▓╛α▓╢α▓ò α▓╕α▓┐α▓éα▓¬α▓íα▓úα│åα▓ùα│å α▓╣α▓╡α▓╛α▓«α▓╛α▓¿α▓╡α│ü α▓ëα▓ñα│ìα▓ñα▓«α▓╡α▓╛α▓ùα▓┐α▓ªα│å.\n• α▓òα▓ƒα▓╛α▓╡α│ü: α▓¼α│åα▓│α│åα▓»α▓¿α│ìα▓¿α│ü α▓òα▓ƒα▓╛α▓╡α│ü α▓«α▓╛α▓íα▓▓α│ü α▓êα▓ù α▓╕α│üα▓░α▓òα│ìα▓╖α▓┐α▓ñα▓╡α▓╛α▓ùα▓┐α▓ªα│å.`
+  },
+  mr: {
+    rain_alert: 'αñ«αÑüαñ╕αñ│αñºαñ╛αñ░ αñ¬αñ╛αñ╡αñ╕αñ╛αñÜαñ╛ αñçαñ╢αñ╛αñ░αñ╛: αñ«αÑüαñ╕αñ│αñºαñ╛αñ░ αñ¬αñ╛αñ╡αñ╕αñ╛αñÜαñ╛ αñàαñéαñªαñ╛αñ£. αñ╕αñ┐αñéαñÜαñ¿ αñÑαñ╛αñéαñ¼αñ╡αñ╛ αñåαñúαñ┐ αñòαñ╛αñóαñúαÑÇ αñòαÑçαñ▓αÑçαñ▓αÑç αñ¬αÑÇαñò αñ╕αÑüαñ░αñòαÑìαñ╖αñ┐αññ αñáαÑçαñ╡αñ╛.',
+    heat_alert: 'αñëαñ╖αÑìαñúαññαÑçαñÜαÑìαñ»αñ╛ αñ▓αñ╛αñƒαÑçαñÜαñ╛ αñçαñ╢αñ╛αñ░αñ╛: αññαÑÇαñ╡αÑìαñ░ αñëαñ╖αÑìαñúαññαÑçαñÜαÑÇ αñ▓αñ╛αñƒ. αñ¬αÑÇαñò αñ╕αÑüαñòαÑé αñ¿αñ»αÑç αñ«αÑìαñ╣αñúαÑéαñ¿ αñ¿αñ┐αñ»αñ«αñ┐αññ αñ¬αñ╛αñúαÑÇ αñªαÑìαñ»αñ╛.',
+    frost_alert: 'αñÑαñéαñíαÑÇαñÜαñ╛ αñçαñ╢αñ╛αñ░αñ╛: αñ¬αñ┐αñòαñ╛αñéαñÜαÑç αñ¿αÑüαñòαñ╕αñ╛αñ¿ αñ╣αÑïαñúαÑìαñ»αñ╛αñÜαÑÇ αñ╢αñòαÑìαñ»αññαñ╛. αñ╕αñéαñ░αñòαÑìαñ╖αñúαñ╛αññαÑìαñ«αñò αñëαñ¬αñ╛αñ»αñ»αÑïαñ£αñ¿αñ╛ αñòαñ░αñ╛.',
+    wind_alert: 'αñ╡αñ╛αñªαñ│αÑÇ αñ╡αñ╛αñ▒αÑìαñ»αñ╛αñÜαñ╛ αñçαñ╢αñ╛αñ░αñ╛: αñ╡αñ╛αñªαñ│αÑÇ αñ╡αñ╛αñ░αÑç αñ╡αñ╛αñ╣αñúαÑìαñ»αñ╛αñÜαÑÇ αñ╢αñòαÑìαñ»αññαñ╛. αñòαÑÇαñƒαñòαñ¿αñ╛αñ╢αñò αñ½αñ╡αñ╛αñ░αñúαÑÇ αñ¬αÑüαñóαÑç αñóαñòαñ▓αñ╛.',
+    adv_rain: (crop) => `• αñ╕αñ┐αñéαñÜαñ¿: αñªαñ▓αñªαñ▓ αñƒαñ╛αñ│αñúαÑìαñ»αñ╛αñ╕αñ╛αñáαÑÇ ${crop} αñ¬αñ┐αñòαñ╛αñ▓αñ╛ αñ¬αñ╛αñúαÑÇ αñªαÑçαñúαÑç αñÑαñ╛αñéαñ¼αñ╡αñ╛.\n• αñ½αñ╡αñ╛αñ░αñúαÑÇ: αñòαÑÇαñƒαñòαñ¿αñ╛αñ╢αñò αñ½αñ╡αñ╛αñ░αÑé αñ¿αñòαñ╛ αñòαñ╛αñ░αñú αññαÑç αñ╡αñ╛αñ╣αÑéαñ¿ αñ£αñ╛αñêαñ▓.\n• αñòαñ╛αñóαñúαÑÇ: αñòαñ╛αñóαñúαÑÇ αñòαÑçαñ▓αÑçαñ▓αÑç αñ¬αÑÇαñò αñ▓αñùαÑçαñÜ αñòαÑïαñ░αñíαÑìαñ»αñ╛ αñ╕αñ╛αñáαñ╡αñúαÑüαñòαÑÇαñÜαÑìαñ»αñ╛ αñ£αñ╛αñùαÑÇ αñ╣αñ▓αñ╡αñ╛.`,
+    adv_wind: (crop) => `• αñ╕αñ┐αñéαñÜαñ¿: αñ╕αñ╛αñ«αñ╛αñ¿αÑìαñ» αñ╕αñ┐αñéαñÜαñ¿αñ╛αñÜαÑÇ αñåαñ╡αñ╢αÑìαñ»αñòαññαñ╛ αñåαñ╣αÑç.\n• αñ½αñ╡αñ╛αñ░αñúαÑÇ: αñ╡αñ╛αñ▒αÑìαñ»αñ╛αñÜαÑìαñ»αñ╛ αñ╡αÑçαñùαñ╛αñ«αÑüαñ│αÑç αñòαÑÇαñƒαñòαñ¿αñ╛αñ╢αñò αñ½αñ╡αñ╛αñ░αñúαÑÇ αñ¬αÑüαñóαÑç αñóαñòαñ▓αñ╛.\n• αñòαñ╛αñóαñúαÑÇ: αñ¬αñ┐αñòαñ╛αñéαñÜαÑç αñ¿αñ┐αñ╡αñ╛αñ░αÑç αñ╕αÑüαñ░αñòαÑìαñ╖αñ┐αññ αñòαñ░αñ╛.`,
+    adv_humidity: (crop) => `• αñ╕αñ┐αñéαñÜαñ¿: αñ¬αñ╛αñúαÑìαñ»αñ╛αñÜαñ╛ αñ¿αñ┐αñÜαñ░αñ╛ αñ╣αÑïαñúαñ╛αñ░αÑç αñ«αñ╛αñ░αÑìαñù αñ«αÑïαñòαñ│αÑç αñáαÑçαñ╡αñ╛.\n• αñ½αñ╡αñ╛αñ░αñúαÑÇ: αñ¼αÑüαñ░αñ╢αÑÇαñ£αñ¿αÑìαñ» αñ░αÑïαñùαñ╛αñÜαñ╛ αñ£αñ╛αñ╕αÑìαññ αñºαÑïαñòαñ╛, αñ¼αÑüαñ░αñ╢αÑÇαñ¿αñ╛αñ╢αñò αñ½αñ╡αñ╛αñ░αñ╛.\n• αñòαñ╛αñóαñúαÑÇ: αñòαñ╛αñóαñúαÑÇ αñòαÑçαñ▓αÑçαñ▓αÑç αñ¬αÑÇαñò αñÜαñ╛αñéαñùαñ▓αÑç αñ╡αñ╛αñ│αñ╡αñ╛.`,
+    adv_default: (crop) => `• αñ╕αñ┐αñéαñÜαñ¿: αñáαñ┐αñ¼αñò αñ╕αñ┐αñéαñÜαñ¿αñ╛αñÜαñ╛ αñ╡αñ╛αñ¬αñ░ αñ╕αÑüαñ░αÑé αñáαÑçαñ╡αñ╛.\n• αñ½αñ╡αñ╛αñ░αñúαÑÇ: αñûαññ/αñòαÑÇαñƒαñòαñ¿αñ╛αñ╢αñò αñ½αñ╡αñ╛αñ░αñúαÑÇαñ╕αñ╛αñáαÑÇ αñ╣αñ╡αñ╛αñ«αñ╛αñ¿ αñàαñ¿αÑüαñòαÑéαñ▓ αñåαñ╣αÑç.\n• αñòαñ╛αñóαñúαÑÇ: αñ¬αñ┐αñòαñ╛αñÜαÑÇ αñòαñ╛αñóαñúαÑÇ αñòαñ░αñúαÑç αñåαññαñ╛ αñ╕αÑüαñ░αñòαÑìαñ╖αñ┐αññ αñåαñ╣αÑç.`
+  },
+  gu: {
+    rain_alert: 'α¬¡α¬╛α¬░α½ç α¬╡α¬░α¬╕α¬╛α¬ªα¬¿α½Ç α¬Üα½çα¬ñα¬╡α¬úα½Ç: α¬¡α¬╛α¬░α½ç α¬╡α¬░α¬╕α¬╛α¬ªα¬¿α½Ç α¬åα¬ùα¬╛α¬╣α½Ç. α¬╕α¬┐α¬éα¬Üα¬╛α¬ê α¬«α½üα¬▓α¬ñα¬╡α½Ç α¬░α¬╛α¬ûα½ï α¬àα¬¿α½ç α¬▓α¬úα¬úα½Ç α¬òα¬░α½çα¬▓ α¬¬α¬╛α¬òα¬¿α½ç α¬╕α½üα¬░α¬òα½ìα¬╖α¬┐α¬ñ α¬òα¬░α½ï.',
+    heat_alert: 'α¬╣α½Çα¬ƒ α¬╡α½çα¬╡α¬¿α½Ç α¬Üα½çα¬ñα¬╡α¬úα½Ç: α¬àα¬ñα¬┐α¬╢α¬» α¬ùα¬░α¬«α½Çα¬¿α½Ç α¬Üα½çα¬ñα¬╡α¬úα½Ç. α¬¬α¬╛α¬òα¬¿α½ç α¬╕α½üα¬òα¬╛α¬ê α¬£α¬ñα½ï α¬¼α¬Üα¬╛α¬╡α¬╡α¬╛ α¬¿α¬┐α¬»α¬«α¬┐α¬ñ α¬╕α¬┐α¬éα¬Üα¬╛α¬ê α¬òα¬░α½ï.',
+    frost_alert: 'α¬¥α¬╛α¬òα¬│/α¬¼α¬░α¬½α¬¿α½Ç α¬Üα½çα¬ñα¬╡α¬úα½Ç: α¬¬α¬╛α¬òα¬¿α½ç α¬¿α½üα¬òα¬╕α╕▓α╕Ö α¬Ñα¬╡α¬╛α¬¿α½Ç α¬╕α¬éα¬¡α¬╛α¬╡α¬¿α¬╛. α¬░α¬òα½ìα¬╖α¬úα¬╛α¬ñα½ìα¬«α¬ò α¬¬α¬ùα¬▓α¬╛α¬é α¬▓α½ï.',
+    wind_alert: 'α¬ñα½çα¬£ α¬¬α¬╡α¬¿α¬¿α½Ç α¬Üα½çα¬ñα¬╡α¬úα½Ç: α¬ñα½çα¬£ α¬¬α¬╡α¬¿ α¬½α½éα¬éα¬òα¬╛α¬╡α¬╛α¬¿α½Ç α¬╢α¬òα½ìα¬»α¬ñα¬╛. α¬£α¬éα¬ñα½üα¬¿α¬╛α¬╢α¬ò α¬¢α¬éα¬ƒα¬òα¬╛α¬╡ α¬«α½ïα¬òα½éα¬½ α¬░α¬╛α¬ûα½ï.',
+    adv_rain: (crop) => `• α¬╕α¬┐α¬éα¬Üα¬╛α¬ê: α¬¬α¬╛α¬úα½Ç α¬¡α¬░α¬╛α¬ê α¬£α¬╡α¬╛α¬Ñα½Ç α¬¼α¬Üα¬╡α¬╛ α¬«α¬╛α¬ƒα½ç ${crop} α¬¬α¬╛α¬òα¬«α¬╛α¬é α¬¬α¬╛α¬úα½Ç α¬åα¬¬α¬╡α¬╛α¬¿α½üα¬é α¬¼α¬éα¬º α¬òα¬░α½ï.\n• α¬¢α¬éα¬ƒα¬òα¬╛α¬╡: α¬£α¬éα¬ñα½üα¬¿α¬╛α¬╢α¬òα½ïα¬¿α½ï α¬¢α¬éα¬ƒα¬òα¬╛α¬╡ α¬òα¬░α¬╢α½ï α¬¿α¬╣α½Çα¬é α¬òα¬╛α¬░α¬ú α¬òα½ç α¬ñα½ç α¬ºα½ïα¬╡α¬╛α¬ê α¬£α¬╢α½ç.\n• α¬▓α¬úα¬úα½Ç: α¬▓α¬úα¬úα½Ç α¬òα¬░α½çα¬▓ α¬¬α¬╛α¬òα¬¿α½ç α¬ñα¬╛α¬ñα½ìα¬òα¬╛α¬▓α¬┐α¬ò α¬╕α½éα¬òα½Ç α¬£α¬ùα½ìα¬»α¬╛α¬Å α¬ûα¬╕α½çα¬íα½ï.`,
+    adv_wind: (crop) => `• α¬╕α¬┐α¬éα¬Üα¬╛α¬ê: α¬╕α¬╛α¬«α¬╛α¬¿α½ìα¬» α¬¬α¬┐α¬»α¬ñα¬¿α½Ç α¬£α¬░α½éα¬░α¬┐α¬»α¬╛α¬ñ α¬¢α½ç.\n• α¬¢α¬éα¬ƒα¬òα¬╛α¬╡: α¬¬α¬╡α¬¿α¬¿α¬╛ α¬òα¬╛α¬░α¬úα½ç α¬£α¬éα¬ñα½üα¬¿α¬╛α¬╢α¬ò α¬¢α¬éα¬ƒα¬òα¬╛α¬╡ α¬«α½ïα¬òα½éα¬½ α¬░α¬╛α¬ûα½ï.\n• α¬▓α¬úα¬úα½Ç: α¬¬α¬╛α¬òα¬¿α¬╛ α¬åα¬╢α½ìα¬░α¬»α¬╕α½ìα¬Ñα¬╛α¬¿α½ïα¬¿α½ç α¬«α¬£α¬¼α½éα¬ñ α¬òα¬░α½ï.`,
+    adv_humidity: (crop) => `• α¬╕α¬┐α¬éα¬Üα¬╛α¬ê: α¬¿α¬┐α¬òα¬╛α¬╕ α¬Üα½çα¬¿α¬▓α½ï α¬Üα¬╛α¬▓α½ü α¬░α¬╛α¬ûα½ï.\n• α¬¢α¬éα¬ƒα¬òα¬╛α¬╡: α¬½α½éα¬ùα¬¿α¬╛ α¬Üα½çα¬¬α¬¿α½üα¬é α¬£α½ïα¬ûα¬« α¬╡α¬ºα½ü α¬¢α½ç, α¬½α½éα¬ùα¬¿α¬╛α¬╢α¬ò α¬¢α¬╛α¬éα¬ƒα½ï.\n• α¬▓α¬úα¬úα½Ç: α¬▓α¬úα¬úα½Ç α¬òα¬░α½çα¬▓ α¬«α¬╛α¬▓α¬¿α½ç α¬╕α¬╛α¬░α½Ç α¬░α½Çα¬ñα½ç α¬╕α½éα¬òα¬╡α½ï.`,
+    adv_default: (crop) => `• α¬╕α¬┐α¬éα¬Üα¬╛α¬ê: α¬¿α¬┐α¬»α¬«α¬┐α¬ñ α¬ƒα¬¬α¬ò α¬╕α¬┐α¬éα¬Üα¬╛α¬ê α¬Üα¬òα½ìα¬░ α¬Üα¬╛α¬▓α½ü α¬░α¬╛α¬ûα½ï.\n• α¬¢α¬éα¬ƒα¬òα¬╛α¬╡: α¬ûα¬╛α¬ñα¬░/α¬£α¬éα¬ñα½üα¬¿α¬╛α¬╢α¬ò α¬¢α¬éα¬ƒα¬òα¬╛α¬╡ α¬«α¬╛α¬ƒα½ç α¬╣α¬╡α¬╛α¬«α¬╛α¬¿ α¬àα¬¿α½üα¬òα½éα¬│ α¬¢α½ç.\n• α¬▓α¬úα¬úα½Ç: α¬¬α¬╛α¬òα¬¿α½Ç α¬▓α¬úα¬úα½Ç α¬òα¬░α¬╡α½Ç α¬╣α¬╡α½ç α¬╕α½üα¬░α¬òα½ìα¬╖α¬┐α¬ñ α¬¢α½ç.`
+  },
+  bn: {
+    rain_alert: 'αª¡αª╛αª░αºÇ αª¼αºâαª╖αºìαªƒαª┐αª░ αª╕αªñαª░αºìαªòαªñαª╛: αª¬αºìαª░αª¼αª▓ αª¼αºâαª╖αºìαªƒαª┐αª░ αª¬αºéαª░αºìαª¼αª╛αª¡αª╛αª╕αÑñ αª╕αºçαªÜ αª¼αª¿αºìαªº αª░αª╛αªûαºüαª¿ αªÅαª¼αªé αªòαª╛αªƒαª╛ αª½αª╕αª▓ αª░αªòαºìαª╖αª╛ αªòαª░αºüαª¿αÑñ',
+    heat_alert: 'αªªαª╛αª¼αªªαª╛αª╣αºçαª░ αª╕αªñαª░αºìαªòαªñαª╛: αªñαºÇαª¼αºìαª░ αªùαª░αª«αºçαª░ αª╕αªñαª░αºìαªòαªñαª╛αÑñ αª½αª╕αª▓ αª╢αºüαªòαª┐αª»αª╝αºç αª»αª╛αªôαª»αª╝αª╛ αª░αºïαªºαºç αª¿αª┐αª»αª╝αª«αª┐αªñ αª╕αºçαªÜ αªªαª┐αª¿αÑñ',
+    frost_alert: 'αªñαºüαª╖αª╛αª░αª¬αª╛αªñαºçαª░ αª╕αªñαª░αºìαªòαªñαª╛: αª½αª╕αª▓αºçαª░ αªñαºüαª╖αª╛αª░αª£αª¿αª┐αªñ αªòαºìαª╖αªñαª┐ αª╣αªñαºç αª¬αª╛αª░αºçαÑñ αª╕αºüαª░αªòαºìαª╖αª╛αª«αºéαª▓αªò αª¼αºìαª»αª¼αª╕αºìαªÑαª╛ αª¿αª┐αª¿αÑñ',
+    wind_alert: 'αª¥αªíαª╝αºï αª╣αª╛αªôαª»αª╝αª╛αª░ αª╕αªñαª░αºìαªòαªñαª╛: αª¬αºìαª░αª¼αª▓ αª¼αª╛αªñαª╛αª╕ αª¼αªçαªñαºç αª¬αª╛αª░αºçαÑñ αªòαºÇαªƒαª¿αª╛αª╢αªò αª╕αºìαª¬αºìαª░αºç αªòαª░αª╛ αª╕αºìαªÑαªùαª┐αªñ αªòαª░αºüαª¿αÑñ',
+    adv_rain: (crop) => `• αª╕αºçαªÜ: αª£αª▓αª╛αª¼αªªαºìαªºαªñαª╛ αªÅαº£αª╛αªñαºç ${crop} αª½αª╕αª▓αºç αª╕αºçαªÜ αªªαºçαªôαºƒαª╛ αª¼αª¿αºìαªº αª░αª╛αªûαºüαª¿αÑñ\n• αª╕αºìαª¬αºìαª░αºç: αªòαºÇαªƒαª¿αª╛αª╢αªò αª╕αºìαª¬αºìαª░αºç αªòαª░αª¼αºçαª¿ αª¿αª╛ αªòαª╛αª░αªú αªÅαªƒαª┐ αªºαºüαºƒαºç αª»αª╛αª¼αºçαÑñ\n• αª½αª╕αª▓ αªòαª╛αªƒαª╛: αªòαª╛αªƒαª╛ αª½αª╕αª▓ αªàαª¼αª┐αª▓αª«αºìαª¼αºç αª╢αºüαªòαª¿αºï αªùαºüαªªαª╛αª«αºç αª╕αª░αª┐αºƒαºç αª¿αª┐αª¿αÑñ`,
+    adv_wind: (crop) => `• αª╕αºçαªÜ: αª╕αºìαª¼αª╛αª¡αª╛αª¼αª┐αªò αª╕αºçαªÜ αª¬αºìαª░αª»αª╝αºïαª£αª¿αÑñ\n• αª╕αºìαª¬αºìαª░αºç: αª¼αª╛αªñαª╛αª╕αºçαª░ αªùαªñαª┐αª¼αºçαªùαºçαª░ αªòαª╛αª░αªúαºç αªòαºÇαªƒαª¿αª╛αª╢αªò αª╕αºìαª¬αºìαª░αºç αª╕αºìαªÑαªùαª┐αªñ αªòαª░αºüαª¿αÑñ\n• αª½αª╕αª▓ αªòαª╛αªƒαª╛: αª½αª╕αª▓αºçαª░ αªåαª╢αºìαª░αª»αª╝ αªòαª╛αªáαª╛αª«αºï αª¿αª┐αª░αª╛αª¬αªª αªòαª░αºüαª¿αÑñ`,
+    adv_humidity: (crop) => `• αª╕αºçαªÜ: αª¿αª┐αªòαª╛αª╢αºÇ αª¿αª╛αª▓αª╛ αª╕αªòαºìαª░αª┐αºƒ αª░αª╛αªûαºüαª¿αÑñ\n• αª╕αºìαª¬αºìαª░αºç: αª¢αªñαºìαª░αª╛αªòαºçαª░ αªåαªòαºìαª░αª«αªú αª╣αªñαºç αª¬αª╛αª░αºç, αª¢αªñαºìαª░αª╛αªòαª¿αª╛αª╢αªò αª╕αºìαª¬αºìαª░αºç αªòαª░αºüαª¿αÑñ\n• αª½αª╕αª▓ αªòαª╛αªƒαª╛: αª½αª╕αª▓ αª¡αª╛αª▓αºï αªòαª░αºç αª╢αºüαªòαª┐αºƒαºç αª¿αª┐αª¿αÑñ`,
+    adv_default: (crop) => `• αª╕αºçαªÜ: αª╕αºìαª¼αª╛αª¡αª╛αª¼αª┐αªò αªíαºìαª░αª┐αª¬ αª╕αºçαªÜ αªÜαª╛αª▓αºü αª░αª╛αªûαºüαª¿αÑñ\n• αª╕αºìαª¬αºìαª░αºç: αª╕αª╛αª░ αª¼αª╛ αªòαºÇαªƒαª¿αª╛αª╢αªò αª╕αºìαª¬αºìαª░αºç αªòαª░αª╛αª░ αª£αª¿αºìαª» αªåαª¼αª╣αª╛αªôαºƒαª╛ αªàαª¿αºüαªòαºéαª▓αÑñ\n• αª½αª╕αª▓ αªòαª╛αªƒαª╛: αªÅαªûαª¿ αª½αª╕αª▓ αªòαª╛αªƒαª╛ αª¿αª┐αª░αª╛αª¬αªªαÑñ`
+  },
+  pa: {
+    rain_alert: 'α¿¡α¿╛α¿░α⌐Ç α¿«α⌐Çα¿éα¿╣ α¿ªα⌐Ç α¿Üα⌐çα¿ñα¿╛α¿╡α¿¿α⌐Ç: α¿¡α¿╛α¿░α⌐Ç α¿«α⌐Çα¿éα¿╣ α¿ªα⌐Ç α¿╕α⌐░α¿¡α¿╛α¿╡α¿¿α¿╛αÑñ α¿╕α¿┐α⌐░α¿Üα¿╛α¿ê α¿░α⌐ïα¿òα⌐ï α¿àα¿ñα⌐ç α¿òα⌐▒α¿ƒα⌐Ç α¿╣α⌐ïα¿ê α¿½α¿╝α¿╕α¿▓ α¿ªα⌐Ç α¿░α⌐▒α¿ûα¿┐α¿å α¿òα¿░α⌐ïαÑñ',
+    heat_alert: 'α¿▓α⌐é α¿ªα⌐Ç α¿Üα⌐çα¿ñα¿╛α¿╡α¿¿α⌐Ç: α¿àα¿ñα¿┐ α¿ªα⌐Ç α¿ùα¿░α¿«α⌐Ç α¿ªα⌐Ç α¿Üα⌐çα¿ñα¿╛α¿╡α¿¿α⌐ÇαÑñ α¿╕α⌐üα⌐▒α¿òα¿ú α¿ñα⌐ïα¿é α¿¼α¿Üα¿╛α¿ëα¿ú α¿▓α¿ê α¿½α¿╝α¿╕α¿▓ α¿ªα⌐Ç α¿¿α¿┐α¿»α¿«α¿ñ α¿╕α¿┐α⌐░α¿Üα¿╛α¿ê α¿òα¿░α⌐ïαÑñ',
+    frost_alert: 'α¿òα⌐ïα¿╣α¿░α⌐ç α¿ªα⌐Ç α¿Üα⌐çα¿ñα¿╛α¿╡α¿¿α⌐Ç: α¿òα⌐ïα¿╣α¿░α⌐ç α¿òα¿╛α¿░α¿¿ α¿½α¿╝α¿╕α¿▓ α¿ªα¿╛ α¿¿α⌐üα¿òα¿╕α¿╛α¿¿ α¿╣α⌐ïα¿ú α¿ªα¿╛ α¿ûα¿ªα¿╕α¿╝α¿╛αÑñ α¿¼α¿Üα¿╛α¿à α¿ªα⌐ç α¿ëα¿¬α¿╛α¿à α¿òα¿░α⌐ïαÑñ',
+    wind_alert: 'α¿ñα⌐çα¿£α¿╝ α¿╣α¿╡α¿╛ α¿ªα⌐Ç α¿Üα⌐çα¿ñα¿╛α¿╡α¿¿α⌐Ç: α¿ñα⌐çα¿£α¿╝ α¿╣α¿╡α¿╛α¿╡α¿╛α¿é α¿Üα⌐▒α¿▓α¿ú α¿ªα¿╛ α¿ûα¿ªα¿╕α¿╝α¿╛αÑñ α¿òα⌐Çα¿ƒα¿¿α¿╛α¿╕α¿╝α¿òα¿╛α¿é α¿ªα¿╛ α¿¢α¿┐α⌐£α¿òα¿╛α¿à α¿«α⌐üα¿▓α¿ñα¿╡α⌐Ç α¿òα¿░α⌐ïαÑñ',
+    adv_rain: (crop) => `• α¿╕α¿┐α⌐░α¿Üα¿╛α¿ê: α¿¬α¿╛α¿úα⌐Ç α¿£α¿«α⌐ìα¿╣α¿╛ α¿╣α⌐ïα¿ú α¿ñα⌐ïα¿é α¿¼α¿Üα¿╛α¿ëα¿ú α¿▓α¿ê ${crop} α¿½α¿╝α¿╕α¿▓ α¿¿α⌐éα⌐░ α¿¬α¿╛α¿úα⌐Ç α¿ªα⌐çα¿úα¿╛ α¿¼α⌐░α¿ª α¿òα¿░α⌐ïαÑñ\n• α¿¢α¿┐α⌐£α¿òα¿╛α¿à: α¿òα⌐Çα¿ƒα¿¿α¿╛α¿╕α¿╝α¿òα¿╛α¿é α¿ªα¿╛ α¿¢α¿┐α⌐£α¿òα¿╛α¿à α¿¿α¿╛ α¿òα¿░α⌐ï α¿òα¿┐α¿ëα¿éα¿òα¿┐ α¿çα¿╣ α¿ºα⌐üα¿▓ α¿£α¿╛α¿╡α⌐çα¿ùα¿╛αÑñ\n• α¿╡α¿╛α¿óα⌐Ç: α¿òα⌐▒α¿ƒα⌐Ç α¿╣α⌐ïα¿ê α¿½α¿╝α¿╕α¿▓ α¿¿α⌐éα⌐░ α¿ñα⌐üα¿░α⌐░α¿ñ α¿╕α⌐üα⌐▒α¿òα⌐Ç α¿Ñα¿╛α¿é 'α¿ñα⌐ç α¿▓α⌐ê α¿£α¿╛α¿ôαÑñ`,
+    adv_wind: (crop) => `• α¿╕α¿┐α⌐░α¿Üα¿╛α¿ê: α¿åα¿« α¿╕α¿┐α⌐░α¿Üα¿╛α¿ê α¿ªα⌐Ç α¿▓α⌐ïα⌐£ α¿╣α⌐êαÑñ\n• α¿¢α¿┐α⌐£α¿òα¿╛α¿à: α¿ñα⌐çα¿£α¿╝ α¿╣α¿╡α¿╛ α¿òα¿╛α¿░α¿¿ α¿¢α¿┐α⌐£α¿òα¿╛α¿à α¿«α⌐üα¿▓α¿ñα¿╡α⌐Ç α¿òα¿░α⌐ïαÑñ\n• α¿╡α¿╛α¿óα⌐Ç: α¿½α¿╝α¿╕α¿▓α¿╛α¿é α¿ªα⌐ç α¿åα¿╕α¿░α⌐ç α¿╕α⌐üα¿░α⌐▒α¿ûα¿┐α¿àα¿ñ α¿òα¿░α⌐ïαÑñ`,
+    adv_humidity: (crop) => `• α¿╕α¿┐α⌐░α¿Üα¿╛α¿ê: α¿¿α¿┐α¿òα¿╛α¿╕α⌐Ç α¿¿α¿╛α¿▓α⌐Çα¿åα¿é α¿╕α¿╛α¿½α¿╝ α¿░α⌐▒α¿ûα⌐ïαÑñ\n• α¿¢α¿┐α⌐£α¿òα¿╛α¿à: α¿ëα⌐▒α¿▓α⌐Ç α¿▓α⌐▒α¿ùα¿ú α¿ªα¿╛ α¿ûα¿╝α¿ñα¿░α¿╛, α¿ëα⌐▒α¿▓α⌐Çα¿¿α¿╛α¿╕α¿╝α¿ò α¿ªα¿╛ α¿¢α¿┐α⌐£α¿òα¿╛α¿à α¿òα¿░α⌐ïαÑñ\n• α¿╡α¿╛α¿óα⌐Ç: α¿òα⌐▒α¿ƒα⌐Ç α¿╣α⌐ïα¿ê α¿½α¿╝α¿╕α¿▓ α¿¿α⌐éα⌐░ α¿Üα⌐░α¿ùα⌐Ç α¿ñαª░α⌐ìα¿╣α¿╛α¿é α¿╕α⌐üα¿òα¿╛α¿ôαÑñ`,
+    adv_default: (crop) => `• α¿╕α¿┐α⌐░α¿Üα¿╛α¿ê: α¿╕α¿ƒα⌐êα¿éα¿íα¿░α¿í α¿íα⌐ìα¿░α¿┐α⌐▒α¿¬ α¿╕α¿┐α¿╕α¿ƒα¿« α¿Üα¿╛α¿▓α⌐é α¿░α⌐▒α¿ûα⌐ïαÑñ\n• α¿¢α¿┐α⌐£α¿òα¿╛α¿à: α¿ûα¿╛α¿ª α¿£α¿╛α¿é α¿òα⌐Çα¿ƒα¿¿α¿╛α¿╕α¿╝α¿ò α¿¢α¿┐α⌐£α¿òα¿╛α¿à α¿▓α¿ê α¿«α⌐îα¿╕α¿« α¿àα¿¿α⌐üα¿òα⌐éα¿▓ α¿╣α⌐êαÑñ\n• α¿╡α¿╛α¿óα⌐Ç: α¿½α¿╝α¿╕α¿▓ α¿ªα⌐Ç α¿╡α¿╛α¿óα⌐Ç α¿òα¿░α¿¿ α¿ªα¿╛ α¿╣α⌐üα¿ú α¿╕α¿╣α⌐Ç α¿╕α¿«α¿╛α¿é α¿╣α⌐êαÑñ`
+  },
+  ml: {
+    rain_alert: 'α┤╢α┤òα╡ìα┤ñα┤«α┤╛α┤» α┤«α┤┤ α┤«α╡üα┤¿α╡ìα┤¿α┤▒α┤┐α┤»α┤┐α┤¬α╡ìα┤¬α╡ì: α┤╢α┤òα╡ìα┤ñα┤«α┤╛α┤» α┤«α┤┤α┤»α╡ìα┤òα╡ìα┤òα╡ì α┤╕α┤╛α┤ºα╡ìα┤»α┤ñ. α┤¿α┤¿α┤»α╡ìα┤òα╡ìα┤òα╡üα┤¿α╡ìα┤¿α┤ñα╡ì α┤Æα┤┤α┤┐α┤╡α┤╛α┤òα╡ìα┤òα╡üα┤ò, α┤╡α┤┐α┤│α┤òα╡╛ α┤╕α┤éα┤░α┤òα╡ìα┤╖α┤┐α┤òα╡ìα┤òα╡üα┤ò.',
+    heat_alert: 'α┤ëα┤╖α╡ìα┤úα┤ñα┤░α┤éα┤ù α┤«α╡üα┤¿α╡ìα┤¿α┤▒α┤┐α┤»α┤┐α┤¬α╡ìα┤¬α╡ì: α┤òα┤ƒα╡üα┤ñα╡ìα┤ñ α┤ëα┤╖α╡ìα┤úα┤ñα┤░α┤éα┤ù α┤«α╡üα┤¿α╡ìα┤¿α┤▒α┤┐α┤»α┤┐α┤¬α╡ìα┤¬α╡ì. α┤╡α┤┐α┤│α┤òα╡╛ α┤╡α┤╛α┤ƒα┤┐α┤¬α╡ìα┤¬α╡ïα┤òα┤╛α┤ñα┤┐α┤░α┤┐α┤òα╡ìα┤òα┤╛α╡╗ α┤òα╡âα┤ñα╡ìα┤»α┤«α┤╛α┤»α┤┐ α┤¿α┤¿α┤»α╡ìα┤òα╡ìα┤òα╡üα┤ò.',
+    frost_alert: 'α┤«α┤₧α╡ìα┤₧α╡ü α┤╡α╡Çα┤┤α╡ìα┤Ü α┤«α╡üα┤¿α╡ìα┤¿α┤▒α┤┐α┤»α┤┐α┤¬α╡ìα┤¬α╡ì: α┤╡α┤┐α┤│α┤òα╡╛α┤òα╡ìα┤òα╡ì α┤«α┤₧α╡ìα┤₧α╡ü α┤«α╡éα┤▓α┤«α╡üα┤│α╡ìα┤│ α┤òα╡çα┤ƒα╡üα┤¬α┤╛α┤ƒα╡üα┤òα╡╛α┤òα╡ìα┤òα╡ì α┤╕α┤╛α┤ºα╡ìα┤»α┤ñ. α┤¬α╡ìα┤░α┤ñα┤┐α┤░α╡ïα┤º α┤¿α┤ƒα┤¬α┤ƒα┤┐α┤òα╡╛ α┤╕α╡ìα┤╡α╡Çα┤òα┤░α┤┐α┤òα╡ìα┤òα╡üα┤ò.',
+    wind_alert: 'α┤╢α┤òα╡ìα┤ñα┤«α┤╛α┤» α┤òα┤╛α┤▒α╡ìα┤▒α╡ì α┤«α╡üα┤¿α╡ìα┤¿α┤▒α┤┐α┤»α┤┐α┤¬α╡ìα┤¬α╡ì: α┤àα┤ñα┤┐α┤╢α┤òα╡ìα┤ñα┤«α┤╛α┤» α┤òα┤╛α┤▒α╡ìα┤▒α┤┐α┤¿α╡ì α┤╕α┤╛α┤ºα╡ìα┤»α┤ñ. α┤òα╡Çα┤ƒα┤¿α┤╛α┤╢α┤┐α┤¿α┤┐ α┤ñα┤│α┤┐α┤òα╡ìα┤òα╡üα┤¿α╡ìα┤¿α┤ñα╡ì α┤«α┤╛α┤▒α╡ìα┤▒α┤┐α┤╡α╡åα┤òα╡ìα┤òα╡üα┤ò.',
+    adv_rain: (crop) => `• α┤£α┤▓α┤╕α╡çα┤Üα┤¿α┤é: α┤╡α╡åα┤│α╡ìα┤│α┤òα╡ìα┤òα╡åα┤ƒα╡ìα┤ƒα╡ì α┤Æα┤┤α┤┐α┤╡α┤╛α┤òα╡ìα┤òα┤╛α╡╗ ${crop} α┤╡α┤┐α┤│α┤òα╡╛α┤òα╡ìα┤òα╡ì α┤¿α┤¿α┤»α╡ìα┤òα╡ìα┤òα╡üα┤¿α╡ìα┤¿α┤ñα╡ì α┤Æα┤┤α┤┐α┤╡α┤╛α┤òα╡ìα┤òα╡üα┤ò.\n• α┤╕α╡ìα┤¬α╡ìα┤░α╡çα┤»α┤┐α┤éα┤ùα╡ì: α┤òα╡Çα┤ƒα┤¿α┤╛α┤╢α┤┐α┤¿α┤┐ α┤¬α╡ìα┤░α┤»α╡ïα┤ùα┤é α┤Æα┤┤α┤┐α┤╡α┤╛α┤òα╡ìα┤òα╡üα┤ò, α┤«α┤┤α┤»α┤┐α╡╜ α┤Æα┤▓α┤┐α┤Üα╡ìα┤Üα╡üα┤¬α╡ïα┤òα╡üα┤é.\n• α┤╡α┤┐α┤│α┤╡α╡åα┤ƒα╡üα┤¬α╡ìα┤¬α╡ì: α┤╡α┤┐α┤│α┤╡α╡åα┤ƒα╡üα┤ñα╡ìα┤ñα┤╡ α┤ëα┤úα┤Öα╡ìα┤Öα┤┐α┤» α┤╕α╡ìα┤Ñα┤▓α┤ñα╡ìα┤ñα╡çα┤òα╡ìα┤òα╡ì α┤«α┤╛α┤▒α╡ìα┤▒α╡üα┤ò.`,
+    adv_wind: (crop) => `• α┤£α┤▓α┤╕α╡çα┤Üα┤¿α┤é: α┤╕α┤╛α┤ºα┤╛α┤░α┤ú α┤░α╡Çα┤ñα┤┐α┤»α┤┐α┤▓α╡üα┤│α╡ìα┤│ α┤¿α┤¿ α┤«α┤ñα┤┐α┤»α┤╛α┤òα╡üα┤é.\n• α┤╕α╡ìα┤¬α╡ìα┤░α╡çα┤»α┤┐α┤éα┤ùα╡ì: α┤òα┤╛α┤▒α╡ìα┤▒α╡üα┤│α╡ìα┤│α┤ñα┤┐α┤¿α┤╛α╡╜ α┤òα╡Çα┤ƒα┤¿α┤╛α┤╢α┤┐α┤¿α┤┐ α┤ñα┤│α┤┐α┤òα╡ìα┤òα╡üα┤¿α╡ìα┤¿α┤ñα╡ì α┤«α┤╛α┤▒α╡ìα┤▒α┤┐α┤╡α╡åα┤òα╡ìα┤òα╡üα┤ò.\n• α┤╡α┤┐α┤│α┤╡α╡åα┤ƒα╡üα┤¬α╡ìα┤¬α╡ì: α┤╡α┤┐α┤│α┤òα╡╛α┤òα╡ìα┤òα╡ì α┤òα╡åα┤ƒα╡ìα┤ƒα┤┐α┤òα╡ìα┤òα┤┐α┤ƒα┤òα╡ìα┤òα╡üα┤¿α╡ìα┤¿ α┤ñα┤╛α┤Öα╡ìα┤Öα╡üα┤òα╡╛ α┤¡α┤ªα╡ìα┤░α┤«α┤╛α┤òα╡ìα┤òα╡üα┤ò.`,
+    adv_humidity: (crop) => `• α┤£α┤▓α┤╕α╡çα┤Üα┤¿α┤é: α┤╡α╡åα┤│α╡ìα┤│α┤é α┤Æα┤┤α╡üα┤òα┤┐α┤¬α╡ìα┤¬α╡ïα┤òα┤╛α┤¿α╡üα┤│α╡ìα┤│ α┤Üα┤╛α┤▓α╡üα┤òα╡╛ α┤╡α╡âα┤ñα╡ìα┤ñα┤┐α┤»α┤╛α┤òα╡ìα┤òα╡üα┤ò.\n• α┤╕α╡ìα┤¬α╡ìα┤░α╡çα┤»α┤┐α┤éα┤ùα╡ì: α┤½α┤éα┤ùα┤╕α╡ì α┤╕α┤╛α┤ºα╡ìα┤»α┤ñ α┤òα╡éα┤ƒα╡üα┤ñα╡╜, α┤ëα┤Üα┤┐α┤ñα┤«α┤╛α┤» α┤½α┤éα┤ùα┤╕α╡ì α┤¿α┤╛α┤╢α┤┐α┤¿α┤┐ α┤ñα┤│α┤┐α┤òα╡ìα┤òα╡üα┤ò.\n• α┤╡α┤┐α┤│α┤╡α╡åα┤ƒα╡üα┤¬α╡ìα┤¬α╡ì: α┤╡α┤┐α┤│α┤╡α╡åα┤ƒα╡üα┤ñα╡ìα┤ñ α┤ºα┤╛α┤¿α╡ìα┤»α┤Öα╡ìα┤Öα╡╛ α┤¿α┤¿α╡ìα┤¿α┤╛α┤»α┤┐ α┤ëα┤úα┤òα╡ìα┤òα╡üα┤ò.`,
+    adv_default: (crop) => `• α┤£α┤▓α┤╕α╡çα┤Üα┤¿α┤é: α┤╕α┤╛α┤ºα┤╛α┤░α┤ú α┤¬α╡ïα┤▓α╡åα┤»α╡üα┤│α╡ìα┤│ α┤íα╡ìα┤░α┤┐α┤¬α╡ìα┤¬α╡ì α┤¿α┤¿ α┤ñα╡üα┤ƒα┤░α╡üα┤ò.\n• α┤╕α╡ìα┤¬α╡ìα┤░α╡çα┤»α┤┐α┤éα┤ùα╡ì: α┤╡α┤│α┤é/α┤òα╡Çα┤ƒα┤¿α┤╛α┤╢α┤┐α┤¿α┤┐ α┤¬α╡ìα┤░α┤»α╡ïα┤ùα┤ñα╡ìα┤ñα┤┐α┤¿α╡ì α┤àα┤¿α╡üα┤òα╡éα┤▓ α┤òα┤╛α┤▓α┤╛α┤╡α┤╕α╡ìα┤Ñ.\n• α┤╡α┤┐α┤│α┤╡α╡åα┤ƒα╡üα┤¬α╡ìα┤¬α╡ì: α┤╡α┤┐α┤│α┤╡α╡åα┤ƒα╡üα┤òα╡ìα┤òα┤╛α╡╗ α┤Åα┤▒α╡ìα┤▒α┤╡α╡üα┤é α┤àα┤¿α╡üα┤»α╡ïα┤£α╡ìα┤»α┤«α┤╛α┤» α┤╕α┤«α┤»α┤«α┤╛α┤úα┤┐α┤ñα╡ì.`
+  }
+};
+
+function getLocalWeatherAdvisory(temp, humidity, rainChance, windSpeed, crop, language) {
+  const activeLang = WEATHER_TRANSLATIONS[language] ? language : 'en';
+  const trans = WEATHER_TRANSLATIONS[activeLang];
   if (rainChance > 70) {
-    return `• Irrigation: Skip watering ${crop} crop to prevent waterlogging.\n• Spraying: Do not spray pesticide as it will leach.\n• Harvest: Move harvested crop to dry storage immediately.`;
+    return trans.adv_rain(crop);
   }
   if (windSpeed > 22) {
-    return `• Irrigation: Standard watering required.\n• Spraying: Postpone pesticide spray due to drift hazard.\n• Harvest: Secure shelter structures.`;
+    return trans.adv_wind(crop);
   }
   if (humidity > 80 && temp > 30) {
-    return `• Irrigation: Keep drainage channels active.\n• Spraying: High fungal risk, spray systemic fungicide.\n• Harvest: Dry yields thoroughly.`;
+    return trans.adv_humidity(crop);
   }
-  return `• Irrigation: Proceed with standard drip cycle.\n• Spraying: Weather is optimal for nitrogen/pest spraying.\n• Harvest: Safe to harvest cotton/paddy now.`;
+  return trans.adv_default(crop);
 }
 
 app.get('/api/weather', authenticateToken, async (req, res) => {
-  const { lat, lng, crop } = req.query;
+  const { lat, lng, crop, language } = req.query;
   if (!lat || !lng) return res.status(400).json({ error: 'Latitude and Longitude are required.' });
 
   const apiKey = process.env.OPENWEATHERMAP_API_KEY || process.env.VITE_OPENWEATHERMAP_API_KEY;
   const targetCrop = crop || 'Cotton';
-
-  const localFallback = () => {
-    const hash = Math.abs(Math.floor((Math.sin(lat) * Math.cos(lng)) * 1000));
-    const temp = 28 + (hash % 8);
-    const rainChance = (hash * 7) % 100;
-    const humidity = 50 + (hash % 40);
-    const windSpeed = 8 + (hash % 18);
-    const uvIndex = 4 + (hash % 7);
-
-    const sortedDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const conditions = ['Sunny', 'Cloudy', 'Drizzle', 'Showers', 'Heavy Rain', 'Partly Cloudy'];
-
-    const forecast = sortedDays.map((day, idx) => {
-      const dailyRainChance = ((hash + idx) * 13) % 100;
-      let condition = conditions[0];
-      if (dailyRainChance > 75) condition = conditions[4];
-      else if (dailyRainChance > 50) condition = conditions[3];
-      else if (dailyRainChance > 30) condition = conditions[2];
-      else if (dailyRainChance > 15) condition = conditions[1];
-      return { day, temp: temp + (hash + idx) % 5 - 2, rainChance: dailyRainChance, condition };
-    });
-
-    const recommendations = getLocalWeatherAdvisory(temp, humidity, rainChance, windSpeed, targetCrop);
-
-    return {
-      currentTemp: temp,
-      description: rainChance > 60 ? 'Rainy' : rainChance > 30 ? 'Cloudy' : 'Sunny',
-      rainChance,
-      windSpeed,
-      humidity,
-      uvIndex,
-      forecast,
-      alerts: rainChance > 70 ? ['Heavy Rain Alert: Outbreak expected in 6 hours.'] : [],
-      recommendation: recommendations
-    };
-  };
+  const activeLang = language || 'en';
 
   if (!apiKey) {
-    return res.json(localFallback());
+    return res.status(400).json({ error: 'OpenWeatherMap API key is missing. Weather service requires VITE_OPENWEATHERMAP_API_KEY configured.' });
   }
 
   try {
@@ -2111,7 +2364,7 @@ app.get('/api/weather', authenticateToken, async (req, res) => {
     );
 
     if (!currentRes.ok || !forecastRes.ok) {
-      return res.json(localFallback());
+      return res.status(502).json({ error: 'Failed to retrieve meteorological telemetry from OpenWeatherMap live servers.' });
     }
 
     const currentData = await currentRes.json();
@@ -2164,12 +2417,19 @@ app.get('/api/weather', authenticateToken, async (req, res) => {
     const rainChance = list[0] && list[0].pop !== undefined ? Math.round(list[0].pop * 100) : (conditionMain === 'Rain' ? 90 : 10);
     const uvIndex = conditionMain === 'Clear' ? 9 : conditionMain === 'Clouds' ? 4 : 2;
 
+    const trans = WEATHER_TRANSLATIONS[activeLang] || WEATHER_TRANSLATIONS.en;
     const alerts = [];
     if (rainChance > 70 || conditionMain === 'Rain') {
-      alerts.push('Heavy Rain Alert: Outbreak expected in 6 hours.');
+      alerts.push(trans.rain_alert);
+    }
+    if (temp > 40) {
+      alerts.push(trans.heat_alert);
+    }
+    if (temp < 4) {
+      alerts.push(trans.frost_alert);
     }
     if (windSpeed > 22) {
-      alerts.push('Strong Wind Alert: Gusts exceeding 22 km/h tomorrow.');
+      alerts.push(trans.wind_alert);
     }
 
     // Dynamic AI weather recommendations from Gemini
@@ -2180,7 +2440,7 @@ app.get('/api/weather', authenticateToken, async (req, res) => {
     if (GEMINI_API_KEY && isKeyValid) {
       try {
         const response = await fetchWithRetry(
-          `https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2189,7 +2449,7 @@ app.get('/api/weather', authenticateToken, async (req, res) => {
                 {
                   parts: [
                     {
-                      text: `Provide short agricultural recommendations for crop "${targetCrop}" based on weather data: Temp ${temp}°C, Humidity ${humidity}%, Wind ${windSpeed} km/h, Rain Chance ${rainChance}%. Generate 3 short advice bullet points: 1. Irrigation advice, 2. Spray recommendations, 3. Harvest alerts. Keep it under 60 words.`
+                      text: `Provide short agricultural recommendations for crop "${targetCrop}" in ${getLanguageName(activeLang)} language based on weather data: Temp ${temp}°C, Humidity ${humidity}%, Wind ${windSpeed} km/h, Rain Chance ${rainChance}%. Generate 3 short advice bullet points: 1. Irrigation advice, 2. Spray recommendations, 3. Harvest alerts. Keep it under 60 words and write entirely in ${getLanguageName(activeLang)}.`
                     }
                   ]
                 }
@@ -2200,18 +2460,18 @@ app.get('/api/weather', authenticateToken, async (req, res) => {
         if (response.ok) {
           const json = await response.json();
           recommendation = getSafeCandidateText(json);
-          if (!recommendation) {
-            recommendation = getLocalWeatherAdvisory(temp, humidity, rainChance, windSpeed, targetCrop);
-          }
-        } else {
-          recommendation = getLocalWeatherAdvisory(temp, humidity, rainChance, windSpeed, targetCrop);
         }
       } catch (err) {
-        recommendation = getLocalWeatherAdvisory(temp, humidity, rainChance, windSpeed, targetCrop);
+        console.warn("Gemini weather advisory generation failed, using local rules:", err.message);
       }
-    } else {
-      recommendation = getLocalWeatherAdvisory(temp, humidity, rainChance, windSpeed, targetCrop);
     }
+    
+    if (!recommendation) {
+      recommendation = getLocalWeatherAdvisory(temp, humidity, rainChance, windSpeed, targetCrop, activeLang);
+    }
+
+    const pressure = currentData.main?.pressure || 1012;
+    const visibility = currentData.visibility ? Math.round(currentData.visibility / 1000) : 10;
 
     res.json({
       currentTemp: temp,
@@ -2220,12 +2480,15 @@ app.get('/api/weather', authenticateToken, async (req, res) => {
       windSpeed,
       humidity,
       uvIndex,
+      pressure,
+      visibility,
       forecast,
       alerts,
       recommendation
     });
   } catch (err) {
-    res.json(localFallback());
+    console.error("OpenWeatherMap request failure:", err.message);
+    res.status(502).json({ error: `Weather service lookup failed: ${err.message}` });
   }
 });
 
@@ -2347,8 +2610,165 @@ app.get('/api/debug', async (req, res) => {
   });
 });
 
+const seedMarketplaceListings = async () => {
+  const seedItems = [
+    {
+      title: 'Mahindra 575 DI Tractor (45 HP)',
+      description: 'Well maintained Mahindra 575 tractor, 2022 model, 1200 hours run. Excellent engine condition, new rear tires. Location near Karimnagar city. Ideal for heavy plowing and transport.',
+      category: 'Machinery',
+      price: 480000,
+      location: 'Karimnagar, Telangana',
+      contact: '+91 98480 22338',
+      sellerName: 'Satyam Agri Machinery Sales',
+      userId: 'system-seed-user-1',
+      imageUrl: 'https://images.unsplash.com/photo-1594913785162-e67853f23bef?auto=format&fit=crop&q=80&w=600',
+      date: new Date().toLocaleDateString()
+    },
+    {
+      title: 'Certified High-Yield Paddy Seeds (BPT 5204)',
+      description: 'Samba Mahsuri (BPT 5204) certified paddy seeds. High germination rate (>90%), premium grain quality, pest-resistant. Available in 25kg bags. Wholesale inquiries welcome.',
+      category: 'Seeds',
+      price: 1150,
+      location: 'Guntur, Andhra Pradesh',
+      contact: '+91 86322 44556',
+      sellerName: 'Krishna Seed Corporation',
+      userId: 'system-seed-user-2',
+      imageUrl: 'https://images.unsplash.com/photo-1530595467537-0b5996c41f2d?auto=format&fit=crop&q=80&w=600',
+      date: new Date().toLocaleDateString()
+    },
+    {
+      title: 'Solar Water Pump System (5 HP)',
+      description: 'Premium quality 5 HP solar submersible pump set with 16 solar panels (325W each), controller, and mounting structure. Government subsidy documents can be provided. 5 years warranty on panels.',
+      category: 'Tools',
+      price: 165000,
+      location: 'Nagpur, Maharashtra',
+      contact: '+91 71225 66778',
+      sellerName: 'Surya Solar Solutions Ltd',
+      userId: 'system-seed-user-3',
+      imageUrl: 'https://images.unsplash.com/photo-1508514177221-188b1cf16e9d?auto=format&fit=crop&q=80&w=600',
+      date: new Date().toLocaleDateString()
+    },
+    {
+      title: 'Precision Drone Pesticide Spraying Service',
+      description: 'Get your crops sprayed efficiently with our advanced agricultural drones. Covers 1 acre in 10 minutes. Ensures uniform distribution and 40% chemical savings. Charges per acre.',
+      category: 'Machinery',
+      price: 450,
+      location: 'Bhatinda, Punjab',
+      contact: '+91 98140 33445',
+      sellerName: 'Falcon Agri-Drones Pvt Ltd',
+      userId: 'system-seed-user-4',
+      imageUrl: 'https://images.unsplash.com/photo-1527977966376-1c8408f9f108?auto=format&fit=crop&q=80&w=600',
+      date: new Date().toLocaleDateString()
+    },
+    {
+      title: 'Organic Neem Cake Fertilizer (Wholesale)',
+      description: '100% pure organic neem cake powder. Excellent natural fertilizer and pest repellent for cotton, paddy, and vegetable crops. Increases nitrogen absorption and soil health. 50kg bags.',
+      category: 'Fertilizers',
+      price: 950,
+      location: 'Coimbatore, Tamil Nadu',
+      contact: '+91 94422 11223',
+      sellerName: 'Kovai Bio Organics',
+      userId: 'system-seed-user-5',
+      imageUrl: 'https://images.unsplash.com/photo-1592417817098-8f3d6eb19675?auto=format&fit=crop&q=80&w=600',
+      date: new Date().toLocaleDateString()
+    },
+    {
+      title: 'John Deere 5050 D Tractor (50 HP)',
+      description: 'John Deere 5050D tractor for sale, 2023 model, sparingly used (400 hours). Power steering, oil-immersed disc brakes. Mint condition, single owner. Contact for live demo.',
+      category: 'Machinery',
+      price: 690000,
+      location: 'Ludhiana, Punjab',
+      contact: '+91 98150 99887',
+      sellerName: 'Punjab Tractors Dealer',
+      userId: 'system-seed-user-6',
+      imageUrl: 'https://images.unsplash.com/photo-1500937386664-56d1dfef3854?auto=format&fit=crop&q=80&w=600',
+      date: new Date().toLocaleDateString()
+    }
+  ];
+
+  try {
+    // 1. Seed MongoDB
+    if (mongoose.connection.readyState === 1) {
+      const count = await Listing.countDocuments();
+      if (count === 0) {
+        await Listing.insertMany(seedItems);
+        console.log('Γ£à Marketplace seed listings successfully imported into MongoDB.');
+      }
+    }
+
+    // 2. Seed JSON Fallback DB
+    initJsonDb();
+    const data = readJsonDb();
+    if (!data.listings) data.listings = [];
+    if (data.listings.length === 0) {
+      data.listings = seedItems.map((item, idx) => ({
+        ...item,
+        _id: 'listing-seed-' + (idx + 1) + '-' + Math.random().toString(36).substr(2, 5),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }));
+      writeJsonDb(data);
+      console.log('Γ£à Marketplace seed listings successfully imported into JSON fallback database.');
+    }
+  } catch (err) {
+    console.error('ΓÜá∩╕Å Error seeding marketplace listings:', err.message);
+  }
+};
+
+// ==================== MARKETPLACE API ROUTES ====================
+
+app.get('/api/marketplace', authenticateToken, async (req, res) => {
+  const { q, category } = req.query;
+  try {
+    const list = await DB.getListings(q, category);
+    res.json(list);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load marketplace listings.' });
+  }
+});
+
+app.post('/api/marketplace', authenticateToken, async (req, res) => {
+  const { title, description, category, price, location, contact, imageUrl } = req.body;
+  if (!title || !description || !category || !price || !location || !contact) {
+    return res.status(400).json({ error: 'Missing listing fields.' });
+  }
+  try {
+    const user = await DB.findUserByUid(req.user.uid);
+    if (!user) return res.status(404).json({ error: 'User profile not found.' });
+
+    const newListing = {
+      title,
+      description,
+      category,
+      price: Number(price),
+      location,
+      contact,
+      sellerName: user.displayName || 'Farmer',
+      userId: req.user.uid,
+      imageUrl: imageUrl || '',
+      date: new Date().toLocaleDateString()
+    };
+
+    const saved = await DB.saveListing(newListing);
+    res.status(201).json(saved);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to post listing.' });
+  }
+});
+
+app.post('/api/marketplace/:id/delete', authenticateToken, async (req, res) => {
+  try {
+    const success = await DB.deleteListing(req.params.id, req.user.uid);
+    if (!success) return res.status(404).json({ error: 'Listing not found or unauthorized.' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete listing.' });
+  }
+});
+
 // Server Listen
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`KisanAI Backend Node/Express Server running on port ${PORT}`);
-  seedAdminUser();
+  await seedAdminUser();
+  await seedMarketplaceListings();
 });
