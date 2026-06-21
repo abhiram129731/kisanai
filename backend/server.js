@@ -30,7 +30,15 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // MongoDB Connection
 mongoose.connect(MONGODB_URI)
-  .then(() => console.log('Connected successfully to MongoDB: ' + MONGODB_URI))
+  .then(async () => {
+    console.log('Connected successfully to MongoDB: ' + MONGODB_URI);
+    try {
+      await seedAdminUser();
+      await seedMarketplaceListings();
+    } catch (err) {
+      console.error('Post-connect seeding failed:', err.message);
+    }
+  })
   .catch(err => {
     console.error('MongoDB database connection failure:', err.message);
     console.log('⚠️ MongoDB is not running or unreachable. KisanAI backend will run in hybrid JSON fallback mode using local file db.json.');
@@ -2563,7 +2571,6 @@ const seedAdminUser = async () => {
     const adminUserObj = {
       uid: adminUid,
       username: adminUsername,
-      email: null,
       passwordHash,
       displayName: adminDisplayName,
       photoURL: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(adminDisplayName)}`,
